@@ -1,6 +1,6 @@
 # Workflow Rules
 
-Behavioral rules that govern how we work on the Intently IDE codebase.
+Behavioral rules that govern how we work on the intently-core codebase.
 
 ## 95% Confidence Rule
 
@@ -22,12 +22,9 @@ When uncertain, say so explicitly:
 Before starting a new task, ALWAYS verify: is the previous task 100% implemented?
 
 "100% implemented" means:
-- All handlers/commands are wired and functional
-- All Tauri commands return correct responses
-- All CLI subcommands work end-to-end
-- Schema validations pass for all artifacts
+- All public API methods work correctly
 - Tests pass for all modified code
-- User can complete all flows
+- No regressions in existing tests
 
 ## Extreme Honesty
 
@@ -45,22 +42,6 @@ Before starting a new task, ALWAYS verify: is the previous task 100% implemented
 - Always create NEW commits — never amend unless explicitly asked
 - Branch naming: `feat/`, `fix/`, `refactor/`, `docs/` prefixes
 
-## Schema-First Development
-
-- When adding or modifying an artifact, update the JSON Schema FIRST
-- Validate that existing tests still pass against the updated schema
-- Then update the Rust types to match the schema
-- Then update the business logic
-- Schema changes require an ADR if they break backward compatibility
-
-## Crate Boundary Discipline
-
-- `Intently_core` MUST NOT depend on `Intently_cli` or `apps/desktop`
-- `Intently_cli` depends on `Intently_core` only via public API
-- `apps/desktop` (Tauri) depends on `Intently_core` only via public API
-- Cross-crate changes require explicit justification
-- Shared types live in `Intently_core` and are re-exported
-
 ## Code Review Checklist
 
 Before submitting or approving code, validate against principles:
@@ -76,5 +57,3 @@ Before submitting or approving code, validate against principles:
 | 7 | Does this module have more than one reason to change? | SRP |
 | 8 | Does business logic have unit tests? | Testing |
 | 9 | Are errors handled explicitly with typed errors? | Error Handling |
-| 10 | Are all artifacts schema-validated? | Schema-First |
-| 11 | Are crate boundaries respected? | Crate Discipline |

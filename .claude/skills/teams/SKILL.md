@@ -22,31 +22,14 @@ Keywords: "who handles", "which team", "route to", "assign to", "responsible for
 
 | Domain | Owner | Agent File | Key Files |
 |--------|-------|------------|-----------|
-| Core Engine (Rust), System Twin, Semantic Diff, Architecture | Kael Okonkwo | kael-okonkwo | `crates/Intently_core/`, `Cargo.toml`, `benches/` |
-| VSCode Extension, System Cockpit, Intention Mode, Product DX | Priya Chakrabarti | priya-chakrabarti | `apps/desktop/src/`, `vscode/` |
-| LLM Orchestrator, Planner Engine, Skill System, AI Strategy | Jun Tanaka | jun-tanaka | `crates/Intently_core/src/planner/`, `crates/Intently_core/src/orchestrator/` |
-| UI Implementation, Design System, Data Visualization | Dara Abramović | dara-abramovic | `apps/desktop/src/cockpit/`, `apps/desktop/src/components/` |
-| Policy Engine, Evidence Engine, Sandbox, Security, Governance | Tomás Herrera | tomas-herrera | `crates/Intently_core/src/policy/`, `crates/Intently_core/src/evidence/` |
-| CLI, Bootstrapper, Triggers, CI, Docs, Ecosystem | Maren Lindqvist | maren-lindqvist | `crates/Intently_cli/`, `.github/`, `docs/`, `schemas/` |
+| Core Engine, System Twin, Semantic Diff, KnowledgeGraph, Extractors, Architecture, Performance | Kael Okonkwo | kael-okonkwo | `src/`, `Cargo.toml`, `tests/` |
+| Security Review, Dependency Audit, Input Validation, Unsafe Code | Tomás Herrera | tomas-herrera | `src/twin/extractors/`, `Cargo.toml` |
 
 ## Routing Logic
 
-1. If the request mentions **Rust, core engine, IR, System Twin, semantic diff, or architecture** -> Kael
-2. If the request mentions **VSCode extension, product, Cockpit, Intention Mode, or DX** -> Priya
-3. If the request mentions **LLM, planner, sandbox execution, skills, or AI strategy** -> Jun
-4. If the request mentions **UI, design system, visualization, Tailwind, components** -> Dara
-5. If the request mentions **policy, evidence, security, compliance, governance** -> Tomás
-6. If the request mentions **CLI, triggers, bootstrapper, CI, docs, onboarding, schemas** -> Maren
-7. If cross-cutting -> primary owner + involve secondary personas
-
-## Cross-Domain Patterns
-
-- **Schema changes** — Kael (types) + Maren (ergonomics) + consumers
-- **New Tauri commands** — Kael (Rust) + Priya (extension) + Dara (UI)
-- **Policy additions** — Tomás (rules) + Kael (engine)
-- **LLM task changes** — Jun (orchestrator) + Tomás (safety)
-- **New features** — Priya (product) + Dara (UI) + Kael (core)
-- **Onboarding flows** — Maren (bootstrapper) + Priya (value) + Tomás (security)
+1. If the request mentions **Rust, core engine, IR, System Twin, semantic diff, KnowledgeGraph, extractors, performance, benchmarks, or architecture** -> Kael
+2. If the request mentions **security, secrets, PII, dependency audit, input validation, unsafe code, supply chain** -> Tomás
+3. If cross-cutting -> Kael as primary, Tomás for security review
 
 ## Output Format
 

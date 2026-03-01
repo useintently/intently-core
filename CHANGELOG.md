@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP server (`intently_mcp`) — moved to separate repository
 - Cross-language policy verification integration tests (belong in policy crate)
 - `regex` dependency (was only used by policy engine)
+- `.claude/` cleanup: removed 4 rules (devops-ci, frontend, tauri, schema), 7 skills (policy/evidence/intent/frontend/tauri-ipc/task-protocol/ci review), 4 agents (priya/jun/dara/maren), 3 hooks (crate-boundary-guard, protect-schemas, intent-guard)
+- Removed npm/npx/pnpm/vitest/cargo-tauri/wasm-pack/trunk from allowed permissions
+- MCP server (`intently_mcp`) — moved to separate repository
+- Cross-language policy verification integration tests (belong in policy crate)
+- `regex` dependency (was only used by policy engine)
 
 ### Added
 - Realtime code analysis engine with <250ms incremental analysis target

@@ -1,12 +1,12 @@
 # Design Principles
 
-Non-negotiable design principles for all Intently IDE contributions, adapted for Rust and the Intently domain.
+Non-negotiable design principles for all intently-core contributions, adapted for Rust.
 
 ## Don't Reinvent the Wheel
 - Before implementing anything non-trivial, check if a mature Rust crate already solves it
-- Preferred crates: serde, tokio, tracing, thiserror, anyhow, clap, uuid, jsonschema, similar
+- Preferred crates: serde, tracing, thiserror, similar, petgraph, tree-sitter, ast-grep-core, rayon, walkdir
 - Encapsulate third-party dependencies behind domain traits (DIP) for swappability
-- NEVER implement your own: JSON parser, schema validator, diff algorithm, async runtime
+- NEVER implement your own: JSON parser, diff algorithm, graph library, parser generator
 - Evaluate crates by: maintenance activity, license (MIT/Apache 2.0), transitive deps, CI visibility
 
 ## KISS — Keep It Simple
@@ -26,23 +26,21 @@ Non-negotiable design principles for all Intently IDE contributions, adapted for
 ## DRY — Don't Repeat Yourself
 - DRY applies to knowledge and business logic, NOT lines of code
 - Rule of 3: extract only when the same knowledge appears a third time
-- Centralize shared types in crate-level `types.rs` or `models.rs` modules
-- Centralize constants in dedicated modules (e.g., `constants.rs`)
-- NEVER force DRY when it creates fragile coupling between unrelated crates
+- Centralize shared types in `twin/types.rs`
+- Centralize cross-language patterns in `extractors/common.rs`
+- NEVER force DRY when it creates fragile coupling between unrelated modules
 
 ## SOLID (Adapted for Rust)
 
 ### SRP — Single Responsibility
-- Each crate has ONE domain: `Intently_core` (engine), `Intently_cli` (interface), `apps/desktop` (IDE)
 - Each module has ONE reason to change, owned by ONE domain area
-- Tauri commands only route — business logic goes to core engine crate
+- `engine.rs` orchestrates; `twin/` builds IR; `parser/` parses; `search/` searches
 - If you need "and" to describe what a module does, split it
 
 ### OCP — Open/Closed
 - Prefer composition over inheritance (Rust's natural model)
-- New policy checkers: implement `PolicyChecker` trait, zero changes to engine
-- New evidence runners: implement `EvidenceRunner` trait, register in config
-- Extension points use trait objects (`Box<dyn Trait>`) or enums with `#[non_exhaustive]`
+- New language extractors: add a new file in `extractors/`, register in dispatch — zero changes to engine
+- Extension points use enums with `#[non_exhaustive]`
 
 ### LSP — Liskov Substitution
 - All trait implementations must honor the trait's documented contract
@@ -50,13 +48,12 @@ Non-negotiable design principles for all Intently IDE contributions, adapted for
 - If a type cannot fulfill a trait fully, it should not implement that trait
 
 ### ISP — Interface Segregation
-- Small, focused traits: `PolicyChecker`, `EvidenceRunner`, `DiffComputer`, `TwinBuilder`
+- Small, focused traits: `DiffComputer`, `TwinBuilder`
 - Consumers depend only on the traits they use — not on a monolithic engine interface
 - Prefer multiple small traits over one large trait with optional methods
 
 ### DIP — Dependency Inversion
-- Core engine defines traits; infrastructure and plugins implement them
-- CLI and IDE depend on core abstractions, never on concrete implementations
+- Core engine defines traits; downstream crates implement them
 - Config uses typed structs (serde) driven by files and environment
 - Test doubles implement the same traits as production code
 

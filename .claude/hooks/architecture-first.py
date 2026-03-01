@@ -5,11 +5,10 @@ import sys
 
 
 CORE_ARCH_DIRS = [
-    "crates/Intently_core/src/ir/",
-    "crates/Intently_core/src/diff/",
-    "crates/Intently_core/src/policy/",
-    "crates/Intently_core/src/planner/",
-    "crates/Intently_core/src/evidence/",
+    "src/twin/",
+    "src/parser/",
+    "src/search/",
+    "src/engine.rs",
 ]
 
 
@@ -23,7 +22,7 @@ def main() -> None:
         if arch_dir in fp:
             print(
                 "New module in core architecture directory. "
-                "Consider documenting the design decision in docs/adr/."
+                "Consider documenting the design decision in docs/adrs/."
             )
             return
 

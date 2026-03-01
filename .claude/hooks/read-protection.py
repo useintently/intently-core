@@ -6,12 +6,9 @@ import re
 
 
 CRITICAL_PATTERNS = [
-    r"schemas/.*\.schema\.json$",
     r"\.claude/agents/.*\.md$",
     r"\.claude/rules/.*\.md$",
     r"(^|/)Cargo\.toml$",
-    r"apps/desktop/src-tauri/tauri\.conf\.json$",
-    r"(^|/)intent\.yaml$",
 ]
 
 

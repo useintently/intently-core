@@ -16,10 +16,6 @@
       "Bash(cargo remove*)",
       "Bash(cargo tarpaulin*)",
       "Bash(rustfmt*)",
-      "Bash(npm *)",
-      "Bash(npx *)",
-      "Bash(pnpm *)",
-      "Bash(vitest*)",
       "Bash(just *)",
       "Bash(gh *)",
       "Bash(git status*)",
@@ -28,11 +24,7 @@
       "Bash(git branch*)",
       "Bash(git add*)",
       "Bash(git stash*)",
-      "Bash(git commit*)",
-      "Bash(cargo tauri*)",
-      "Bash(cargo-tauri*)",
-      "Bash(wasm-pack*)",
-      "Bash(trunk *)"
+      "Bash(git commit*)"
     ],
     "deny": [
       "Read(**/.env)",
@@ -73,22 +65,7 @@
           },
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/protect-schemas.py",
-            "timeout": 5
-          },
-          {
-            "type": "command",
             "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/architecture-first.py",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/crate-boundary-guard.py",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/intent-guard.py",
             "timeout": 5
           }
         ]

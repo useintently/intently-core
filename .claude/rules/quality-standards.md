@@ -1,6 +1,6 @@
 # Quality Standards
 
-Non-negotiable quality rules for all Intently IDE contributions.
+Non-negotiable quality rules for all intently-core contributions.
 
 ## Testing — If There's No Test, It Doesn't Work
 
@@ -13,9 +13,7 @@ Non-negotiable quality rules for all Intently IDE contributions.
 
 ### Test Pyramid
 ```
-      /  E2E  \        <- Few: critical end-to-end flows only
-     /----------\
-    / Integration \    <- Moderate: Tauri commands, cross-crate, IPC
+    / Integration \    <- Moderate: cross-module, full extraction pipeline
    /----------------\
   /    Unit Tests    \  <- Many: isolated logic, fast, deterministic
 ```
@@ -23,26 +21,20 @@ Non-negotiable quality rules for all Intently IDE contributions.
 ### Rust Tests
 - Unit tests: `#[cfg(test)] mod tests` in each module
 - Integration tests: `tests/` directory at crate root
-- Run during development: `cargo test -p Intently_core --lib`
+- Run during development: `cargo test --lib`
 - Property-based: `proptest` for parsers, transformers, diffing
 - Benchmarks: `criterion` in `benches/` for hot paths
-- Coverage: `cargo-tarpaulin` with target >= 80% per crate
-
-### Frontend Tests
-- Vitest + React Testing Library for component behavior
-- Coverage target: 80% for `src/` (excluding generated bindings)
-- Mock Tauri IPC in tests — never depend on running Tauri backend
-- Test names describe behavior: `it("shows error when intent validation fails")`
+- Coverage: `cargo-tarpaulin` with target >= 80%
 
 ### What to Test vs NOT Test
-- DO test: IR construction, semantic diff, policy evaluation, evidence collection, intent parsing, planner logic
-- DON'T test: serde derives, generated proto/schema code, third-party crate internals, trivial getters
+- DO test: extraction pipeline, twin building, semantic diff, symbol extraction, call graph, knowledge graph, language-specific extractors
+- DON'T test: serde derives, third-party crate internals, trivial getters
 
 ## Error Handling — Fail Fast, Fail Loud, Fail Clear
 
 - NEVER swallow errors. `let _ = result;` discarding Result is forbidden
-- Validate inputs at system boundaries (CLI args, IPC commands, file parsing)
-- Use typed domain errors per crate with `thiserror`
+- Validate inputs at system boundaries (public API methods, file parsing)
+- Use typed domain errors with `thiserror`
 - Differentiate recoverable (retry, fallback) from irrecoverable (fail immediately)
 - NEVER use `panic!` in library code — reserve for truly impossible states
 - NEVER return magic values (`-1`, `None`, empty string) to indicate errors
@@ -50,15 +42,12 @@ Non-negotiable quality rules for all Intently IDE contributions.
 
 ## Naming
 - Choose the most specific, descriptive name. Long and clear > short and ambiguous
-- `intent_policy_id` not `id`, `twin_component` not `component`, `diff_entry` not `entry`
+- `twin_component` not `component`, `diff_entry` not `entry`, `extraction_result` not `result`
 - Rust: `snake_case` functions, `PascalCase` types, `UPPER_CASE` constants
-- TypeScript: `camelCase` functions, `PascalCase` components/types
 
 ## Linting & Formatting
 - Rust: `cargo clippy -- -D warnings` with pedantic lints, zero warnings
 - Rust: `cargo fmt --check` with project `.rustfmt.toml`
-- TypeScript: ESLint strict config, zero warnings
-- TypeScript: Prettier for formatting
 
 ## Changelog
 - ALL visible changes go in `CHANGELOG.md` under `[Unreleased]`
