@@ -1,0 +1,120 @@
+{
+  "outputStyle": "Explanatory",
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(cargo build*)",
+      "Bash(cargo test*)",
+      "Bash(cargo check*)",
+      "Bash(cargo run*)",
+      "Bash(cargo clippy*)",
+      "Bash(cargo fmt*)",
+      "Bash(cargo doc*)",
+      "Bash(cargo add*)",
+      "Bash(cargo remove*)",
+      "Bash(cargo tarpaulin*)",
+      "Bash(rustfmt*)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(pnpm *)",
+      "Bash(vitest*)",
+      "Bash(just *)",
+      "Bash(gh *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git add*)",
+      "Bash(git stash*)",
+      "Bash(git commit*)",
+      "Bash(cargo tauri*)",
+      "Bash(cargo-tauri*)",
+      "Bash(wasm-pack*)",
+      "Bash(trunk *)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/secrets/**)",
+      "Read(**/credentials.json)",
+      "Edit(**/.env)",
+      "Edit(**/.env.*)",
+      "Edit(**/secrets/**)",
+      "Edit(**/credentials.json)",
+      "Write(**/.env)",
+      "Write(**/.env.*)",
+      "Write(**/secrets/**)",
+      "Write(**/credentials.json)",
+      "Write(**/target/**)",
+      "Edit(**/target/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/read-protection.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/protect-generated-files.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/protect-schemas.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/architecture-first.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/crate-boundary-guard.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/intent-guard.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/task-completed.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/teammate-idle.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
