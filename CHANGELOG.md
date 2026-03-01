@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 3 new monorepo test fixtures: `npm_monorepo/` (npm workspace, 2 TS/Express packages), `go_workspace/` (Go workspace, 2 Gin modules), `uv_workspace/` (uv workspace, 2 FastAPI packages) — exercises all 5 workspace detection paths end-to-end
+- `analyze_fixtures` example binary (`cargo run --example analyze_fixtures`) — runs IntentlyEngine on all fixtures, outputs per-fixture JSON + summary table to stderr, supports single-fixture filter and `--summary` mode
+- 9 new integration tests: 3 per new monorepo fixture (component detection, workspace kind, route/symbol extraction) — from 534 to 543 total tests
 - `CodeModel::filtered(min_confidence)` — returns a filtered copy with only references at or above the confidence threshold, recalculates stats and filters directory dependencies
 - `Reference.is_test_reference` boolean field — `true` when source file has `FileRole::Test` and target file does not, enabling downstream consumers to separate test→production edges from production architecture
 - Test→production reference tagging in `CodeModelBuilder` after import resolution — automatically classifies cross-boundary references during model build

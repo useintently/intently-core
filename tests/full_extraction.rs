@@ -2353,6 +2353,230 @@ fn monorepo_stats_aggregate_across_components() {
     );
 }
 
+// ─── npm workspace ───────────────────────────────────────────────
+
+#[test]
+fn npm_monorepo_produces_multiple_components() {
+    let result = analyze_fixture("npm_monorepo");
+
+    assert!(
+        result.model.components.len() >= 2,
+        "npm monorepo should produce ≥2 components, got {}",
+        result.model.components.len()
+    );
+
+    let component_names: Vec<&str> = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+
+    assert!(
+        component_names.iter().any(|n| n.contains("gateway")),
+        "Should have a gateway component, got: {:?}",
+        component_names
+    );
+    assert!(
+        component_names.iter().any(|n| n.contains("products")),
+        "Should have a products component, got: {:?}",
+        component_names
+    );
+}
+
+#[test]
+fn npm_monorepo_detects_workspace_kind() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/npm_monorepo");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let layout = engine
+        .workspace_layout()
+        .expect("npm monorepo should have a workspace layout");
+
+    assert_eq!(layout.kind, WorkspaceKind::Npm);
+    assert_eq!(
+        layout.packages.len(),
+        2,
+        "npm monorepo should detect 2 packages, got {}",
+        layout.packages.len()
+    );
+}
+
+#[test]
+fn npm_monorepo_extracts_routes_across_packages() {
+    let result = analyze_fixture("npm_monorepo");
+
+    let total_routes: usize = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.interfaces.len())
+        .sum();
+
+    assert!(
+        total_routes >= 6,
+        "npm monorepo should have ≥6 total routes across packages, got {}",
+        total_routes
+    );
+}
+
+// ─── Go workspace ────────────────────────────────────────────────
+
+#[test]
+fn go_workspace_produces_multiple_components() {
+    let result = analyze_fixture("go_workspace");
+
+    assert!(
+        result.model.components.len() >= 2,
+        "Go workspace should produce ≥2 components, got {}",
+        result.model.components.len()
+    );
+
+    let component_names: Vec<&str> = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+
+    // go.work uses module names from go.mod files
+    assert!(
+        component_names.iter().any(|n| n.contains("api")),
+        "Should have an api component, got: {:?}",
+        component_names
+    );
+    assert!(
+        component_names.iter().any(|n| n.contains("auth")),
+        "Should have an auth component, got: {:?}",
+        component_names
+    );
+}
+
+#[test]
+fn go_workspace_detects_workspace_kind() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/go_workspace");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let layout = engine
+        .workspace_layout()
+        .expect("Go workspace should have a workspace layout");
+
+    assert_eq!(layout.kind, WorkspaceKind::Go);
+    assert_eq!(
+        layout.packages.len(),
+        2,
+        "Go workspace should detect 2 packages, got {}",
+        layout.packages.len()
+    );
+}
+
+#[test]
+fn go_workspace_extracts_routes_and_symbols() {
+    let result = analyze_fixture("go_workspace");
+
+    let total_routes: usize = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.interfaces.len())
+        .sum();
+
+    assert!(
+        total_routes >= 5,
+        "Go workspace should have ≥5 Gin routes, got {}",
+        total_routes
+    );
+
+    let total_symbols: usize = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.symbols.len())
+        .sum();
+
+    assert!(
+        total_symbols >= 5,
+        "Go workspace should have ≥5 symbols, got {}",
+        total_symbols
+    );
+}
+
+// ─── uv workspace ────────────────────────────────────────────────
+
+#[test]
+fn uv_workspace_produces_multiple_components() {
+    let result = analyze_fixture("uv_workspace");
+
+    assert!(
+        result.model.components.len() >= 2,
+        "uv workspace should produce ≥2 components, got {}",
+        result.model.components.len()
+    );
+
+    let component_names: Vec<&str> = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+
+    assert!(
+        component_names.iter().any(|n| n.contains("api")),
+        "Should have an api component, got: {:?}",
+        component_names
+    );
+    assert!(
+        component_names.iter().any(|n| n.contains("auth")),
+        "Should have an auth component, got: {:?}",
+        component_names
+    );
+}
+
+#[test]
+fn uv_workspace_detects_workspace_kind() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/uv_workspace");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let layout = engine
+        .workspace_layout()
+        .expect("uv workspace should have a workspace layout");
+
+    assert_eq!(layout.kind, WorkspaceKind::Uv);
+    assert_eq!(
+        layout.packages.len(),
+        2,
+        "uv workspace should detect 2 packages, got {}",
+        layout.packages.len()
+    );
+}
+
+#[test]
+fn uv_workspace_extracts_routes_and_symbols() {
+    let result = analyze_fixture("uv_workspace");
+
+    let total_routes: usize = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.interfaces.len())
+        .sum();
+
+    assert!(
+        total_routes >= 4,
+        "uv workspace should have ≥4 FastAPI routes, got {}",
+        total_routes
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  FileTree
 // ═══════════════════════════════════════════════════════════════════
