@@ -27,7 +27,7 @@ Non-negotiable quality rules for all intently-core contributions.
 - Coverage: `cargo-tarpaulin` with target >= 80%
 
 ### What to Test vs NOT Test
-- DO test: extraction pipeline, twin building, semantic diff, symbol extraction, call graph, knowledge graph, language-specific extractors
+- DO test: extraction pipeline, model building, semantic diff, symbol extraction, call graph, knowledge graph, language-specific extractors
 - DON'T test: serde derives, third-party crate internals, trivial getters
 
 ## Error Handling — Fail Fast, Fail Loud, Fail Clear

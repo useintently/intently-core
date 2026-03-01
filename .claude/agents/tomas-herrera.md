@@ -30,8 +30,8 @@ Tomás brings security expertise to intently-core reviews. He is the most senior
 
 ## Key Files
 
-- `src/twin/extractors/` — Language-specific extractors (security-relevant pattern detection)
-- `src/twin/types.rs` — Data types that may carry sensitive info
+- `src/model/extractors/` — Language-specific extractors (security-relevant pattern detection)
+- `src/model/types.rs` — Data types that may carry sensitive info
 - `src/error.rs` — Error types (ensure no internal detail leaks)
 - `Cargo.toml` — Dependency audit
 

@@ -26,7 +26,7 @@
 
 **Severity:** High
 **Impact:** NestJS is the most popular Node.js framework by npm downloads. Zero endpoint detection means Intently is blind to all NestJS projects.
-**File:** `crates/intently_core/src/twin/extractors/typescript.rs`
+**File:** `crates/intently_core/src/model/extractors/typescript.rs`
 
 ### Problem
 
@@ -166,7 +166,7 @@ For each framework, track a "current prefix" stack during the CST walk. When ent
 
 This works for single-file route definitions (covers ~60% of real-world Laravel and C# controller apps).
 
-**Phase 2 (Cross-file) — TwinBuilder post-processing:**
+**Phase 2 (Cross-file) — CodeModelBuilder post-processing:**
 
 After all files are extracted, use `references` and `imports` to resolve group assignments:
 1. Find `r.Group("/api")` calls and track what variable they're assigned to
@@ -181,7 +181,7 @@ This is architecturally similar to `import_resolver.rs` — it's a cross-file li
 
 **Severity:** High
 **Impact:** ASP.NET Minimal APIs are the default for new .NET projects since .NET 6 (2021). The eShop reference architecture (Microsoft's official sample) uses them exclusively.
-**File:** `crates/intently_core/src/twin/extractors/csharp.rs`
+**File:** `crates/intently_core/src/model/extractors/csharp.rs`
 
 ### Problem
 
@@ -240,7 +240,7 @@ MapMethods → HttpMethod::All (with specific method list)
 
 **Severity:** Medium
 **Impact:** Without symbols, the MCP `query_symbols` tool returns empty results for Java/C# projects, degrading the knowledge graph.
-**File:** `crates/intently_core/src/twin/extractors/symbols.rs`
+**File:** `crates/intently_core/src/model/extractors/symbols.rs`
 
 ### Investigation Results
 
@@ -299,7 +299,7 @@ The 2 symbols are `scrollToEnd` and `submitOnEnter` — both JavaScript function
 
 **Severity:** Low (Laravel 11 skeleton has only 1 route; real apps still use `Route::method()`)
 **Impact:** Resource routes, route groups with middleware/prefix, and `Route::any/match` not detected.
-**File:** `crates/intently_core/src/twin/extractors/php.rs`
+**File:** `crates/intently_core/src/model/extractors/php.rs`
 
 ### What Works
 

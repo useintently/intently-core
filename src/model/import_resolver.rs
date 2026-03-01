@@ -1,4 +1,4 @@
-//! Cross-file import resolution for the System Twin.
+//! Cross-file import resolution for the CodeModel.
 //!
 //! This module performs a post-processing step after per-file extraction:
 //! it takes the aggregated imports and symbols from all files and resolves
@@ -304,7 +304,7 @@ fn append_extension(path: &Path, ext: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::twin::types::{SourceAnchor, SymbolKind};
+    use crate::model::types::{SourceAnchor, SymbolKind};
 
     /// Helper: create a minimal Symbol for testing.
     fn make_symbol(name: &str, file: &str, line: usize) -> Symbol {

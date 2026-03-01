@@ -21,7 +21,7 @@ use tracing::warn;
 use tree_sitter::{Node, Tree};
 
 use crate::parser::SupportedLanguage;
-use crate::twin::types::{Symbol, SymbolKind, Visibility};
+use crate::model::types::{Symbol, SymbolKind, Visibility};
 
 use super::common::anchor_from_node;
 

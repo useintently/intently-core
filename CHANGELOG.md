@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Renamed `SystemTwin` to `CodeModel` — more precise name for a semantic snapshot (not a live mirror)
+- Renamed module `twin/` to `model/`, `TwinBuilder` to `CodeModelBuilder`, `TwinStats` to `CodeModelStats`
+- Renamed `ExtractionResult.twin` field to `ExtractionResult.model`
+- Renamed `PipelineTiming.twin_build_ms` to `PipelineTiming.model_build_ms`
 - Restructured repository: repo IS the crate (no more `crates/` workspace directory)
 - Renamed `AnalysisResult` to `ExtractionResult` — reflects extraction-only scope
 - Removed `policy_ms` from `PipelineTiming` — policy evaluation is not core's responsibility

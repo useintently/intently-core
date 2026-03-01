@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::twin::types::{ImportInfo, ModuleBoundary, Symbol, Visibility};
+use crate::model::types::{ImportInfo, ModuleBoundary, Symbol, Visibility};
 
 /// Name used for files that live directly in the project root with no
 /// subdirectory structure.
@@ -180,7 +180,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::twin::types::{SourceAnchor, SymbolKind};
+    use crate::model::types::{SourceAnchor, SymbolKind};
 
     /// Helper to create a public symbol with minimal fields.
     fn public_symbol(name: &str, file: &str) -> Symbol {

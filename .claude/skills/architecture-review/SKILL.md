@@ -16,14 +16,14 @@ Keywords: "architecture review", "review architecture", "ADR", "module boundary"
 ## What This Skill Does
 
 1. **Module Boundaries** — Verify separation of concerns
-   - `engine.rs` orchestrates; `twin/` builds IR; `parser/` parses; `search/` searches
+   - `engine.rs` orchestrates; `model/` builds IR; `parser/` parses; `search/` searches
    - Each module has a focused responsibility (SRP)
    - Public API surface (`pub` items in `lib.rs`) is minimal and intentional
    - No leaking of internal types through the public API
 
 2. **Dependency Direction** — Validate dependency flow
    - No circular dependencies between modules
-   - Core types in `twin/types.rs` are the shared vocabulary
+   - Core types in `model/types.rs` are the shared vocabulary
    - Extractors depend on common utilities, not on each other
    - Check with `cargo tree` for external dependency analysis
 

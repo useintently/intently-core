@@ -28,7 +28,7 @@ Exit codes determine behavior:
 |------|------|---------|----------|
 | Generated Files Protection | `protect-generated-files.py` | Edit/Write to `target/`, `dist/`, `*.generated.*` | **Blocks.** Generated and build artifacts must not be edited manually. |
 | Read Protection | `read-protection.py` | Read with `offset`/`limit` on critical files (rules, agents, Cargo.toml) | **Blocks.** Critical configuration files must be read in full to avoid partial context. |
-| Architecture First | `architecture-first.py` | Write (new file) in core architecture directories (`src/twin/`, `src/parser/`, `src/search/`) | **Advisory.** Suggests documenting design decisions in `docs/adrs/`. |
+| Architecture First | `architecture-first.py` | Write (new file) in core architecture directories (`src/model/`, `src/parser/`, `src/search/`) | **Advisory.** Suggests documenting design decisions in `docs/adrs/`. |
 | Task Completed | `task-completed.sh` | Post-task completion | **Advisory.** Prints a Definition of Done checklist: tests, clippy, formatting, changelog. |
 | Teammate Idle | `teammate-idle.sh` | Teammate goes idle | **Advisory.** Reminds to check the task list for pending unblocked work. |
 
@@ -51,7 +51,7 @@ Protected paths:
 
 ### architecture-first.py (Advisory)
 
-Prints a reminder when new files are created in core engine directories (`src/twin/`, `src/parser/`, `src/search/`). New modules in these areas represent architectural decisions that should be documented.
+Prints a reminder when new files are created in core engine directories (`src/model/`, `src/parser/`, `src/search/`). New modules in these areas represent architectural decisions that should be documented.
 
 ### task-completed.sh (Advisory)
 

@@ -1,13 +1,13 @@
-//! Semantic diff computation between two System Twin states.
+//! Semantic diff computation between two CodeModel states.
 //!
 //! The diff captures behavioral changes — added/removed endpoints,
 //! new dependencies, changed sinks — not textual file changes.
 
 use serde::{Deserialize, Serialize};
 
-use super::types::{Dependency, Interface, Sink, SystemTwin};
+use super::types::{Dependency, Interface, Sink, CodeModel};
 
-/// Semantic diff between two System Twin snapshots.
+/// Semantic diff between two CodeModel snapshots.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SemanticDiff {
     pub interface_changes: Vec<InterfaceChange>,
@@ -61,13 +61,13 @@ pub enum RiskLevel {
     High,
 }
 
-/// Compute the semantic diff between two System Twin states.
+/// Compute the semantic diff between two CodeModel states.
 ///
 /// Matching strategy:
 /// - Interfaces matched by (method, path)
 /// - Dependencies matched by (target, dependency_type)
 /// - Sinks matched by (file, line, text)
-pub fn compute_diff(old: &SystemTwin, new: &SystemTwin) -> SemanticDiff {
+pub fn compute_diff(old: &CodeModel, new: &CodeModel) -> SemanticDiff {
     let old_interfaces = collect_interfaces(old);
     let new_interfaces = collect_interfaces(new);
 
@@ -117,19 +117,19 @@ pub fn compute_diff(old: &SystemTwin, new: &SystemTwin) -> SemanticDiff {
     }
 }
 
-fn collect_interfaces(twin: &SystemTwin) -> Vec<&Interface> {
-    twin.components.iter().flat_map(|c| &c.interfaces).collect()
+fn collect_interfaces(model: &CodeModel) -> Vec<&Interface> {
+    model.components.iter().flat_map(|c| &c.interfaces).collect()
 }
 
-fn collect_dependencies(twin: &SystemTwin) -> Vec<&Dependency> {
-    twin.components
+fn collect_dependencies(model: &CodeModel) -> Vec<&Dependency> {
+    model.components
         .iter()
         .flat_map(|c| &c.dependencies)
         .collect()
 }
 
-fn collect_sinks(twin: &SystemTwin) -> Vec<&Sink> {
-    twin.components.iter().flat_map(|c| &c.sinks).collect()
+fn collect_sinks(model: &CodeModel) -> Vec<&Sink> {
+    model.components.iter().flat_map(|c| &c.sinks).collect()
 }
 
 /// Generic diff computation: items present in `new` but not `old` are Added,
@@ -202,14 +202,14 @@ mod tests {
 
     use super::*;
     use crate::parser::SupportedLanguage;
-    use crate::twin::types::*;
+    use crate::model::types::*;
 
-    fn make_twin(
+    fn make_model(
         interfaces: Vec<Interface>,
         dependencies: Vec<Dependency>,
         sinks: Vec<Sink>,
-    ) -> SystemTwin {
-        SystemTwin {
+    ) -> CodeModel {
+        CodeModel {
             version: "1.0".into(),
             project_name: "test".into(),
             components: vec![Component {
@@ -224,7 +224,7 @@ mod tests {
                 data_models: vec![],
                 module_boundaries: vec![],
             }],
-            stats: TwinStats {
+            stats: CodeModelStats {
                 files_analyzed: 1,
                 total_interfaces: 0,
                 total_dependencies: 0,
@@ -249,12 +249,12 @@ mod tests {
 
     #[test]
     fn no_change_produces_empty_diff() {
-        let twin = make_twin(
+        let model = make_model(
             vec![endpoint(HttpMethod::Get, "/health", None)],
             vec![],
             vec![],
         );
-        let diff = compute_diff(&twin, &twin);
+        let diff = compute_diff(&model, &model);
 
         assert!(diff.interface_changes.is_empty());
         assert!(diff.dependency_changes.is_empty());
@@ -264,8 +264,8 @@ mod tests {
 
     #[test]
     fn detects_added_endpoint() {
-        let old = make_twin(vec![], vec![], vec![]);
-        let new = make_twin(
+        let old = make_model(vec![], vec![], vec![]);
+        let new = make_model(
             vec![endpoint(HttpMethod::Post, "/api/users", None)],
             vec![],
             vec![],
@@ -279,12 +279,12 @@ mod tests {
 
     #[test]
     fn detects_removed_endpoint() {
-        let old = make_twin(
+        let old = make_model(
             vec![endpoint(HttpMethod::Delete, "/api/users/:id", None)],
             vec![],
             vec![],
         );
-        let new = make_twin(vec![], vec![], vec![]);
+        let new = make_model(vec![], vec![], vec![]);
         let diff = compute_diff(&old, &new);
 
         assert_eq!(diff.interface_changes.len(), 1);
@@ -293,8 +293,8 @@ mod tests {
 
     #[test]
     fn new_pii_sink_raises_security_risk() {
-        let old = make_twin(vec![], vec![], vec![]);
-        let new = make_twin(
+        let old = make_model(vec![], vec![], vec![]);
+        let new = make_model(
             vec![],
             vec![],
             vec![Sink {
@@ -312,8 +312,8 @@ mod tests {
 
     #[test]
     fn unauthed_new_endpoint_raises_security_risk() {
-        let old = make_twin(vec![], vec![], vec![]);
-        let new = make_twin(
+        let old = make_model(vec![], vec![], vec![]);
+        let new = make_model(
             vec![endpoint(HttpMethod::Post, "/api/payments", None)],
             vec![],
             vec![],

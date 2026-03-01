@@ -1,6 +1,6 @@
 //! Knowledge graph backed by petgraph.
 //!
-//! `KnowledgeGraph` is a **derived view** over the `SystemTwin`. It converts
+//! `KnowledgeGraph` is a **derived view** over the `CodeModel`. It converts
 //! flat `Vec<T>` data (symbols, references, imports, modules) into a directed
 //! graph with O(1) adjacency lookups. This replaces hand-rolled BFS with
 //! petgraph's standard traversal algorithms and enables structural analysis
@@ -18,7 +18,7 @@ use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 
 use super::types::{
-    DataModelKind, HttpMethod, ReferenceKind, SymbolKind, SystemTwin,
+    DataModelKind, HttpMethod, ReferenceKind, SymbolKind, CodeModel,
 };
 
 // ---------------------------------------------------------------------------
@@ -231,7 +231,7 @@ pub struct GraphStats {
 // KnowledgeGraph
 // ---------------------------------------------------------------------------
 
-/// A directed graph derived from the SystemTwin.
+/// A directed graph derived from the CodeModel.
 ///
 /// Provides O(1) adjacency lookups for callers, callees, type hierarchy,
 /// and impact analysis. Supports structural analysis (cycle detection via
@@ -242,7 +242,7 @@ pub struct KnowledgeGraph {
 }
 
 impl KnowledgeGraph {
-    /// Build a knowledge graph from a SystemTwin.
+    /// Build a knowledge graph from a CodeModel.
     ///
     /// The 7-step construction algorithm:
     /// 1. Create Module nodes from ModuleBoundary data
@@ -252,13 +252,13 @@ impl KnowledgeGraph {
     /// 5. Create DataModel nodes with Defines edges
     /// 6. Process References → Calls, Extends, Implements, UsesType, Imports edges
     /// 7. Process ModuleBoundaries → Contains, Exposes, DependsOn edges
-    pub fn from_twin(twin: &SystemTwin) -> Self {
+    pub fn from_code_model(model: &CodeModel) -> Self {
         let mut kg = Self {
             graph: DiGraph::new(),
             node_index: HashMap::new(),
         };
 
-        for component in &twin.components {
+        for component in &model.components {
             // Step 1: Module nodes
             for module in &component.module_boundaries {
                 kg.ensure_node(NodeKey::Module(module.name.clone()), || {
@@ -863,11 +863,11 @@ impl KnowledgeGraph {
 mod tests {
     use super::*;
     use crate::parser::SupportedLanguage;
-    use crate::twin::types::*;
+    use crate::model::types::*;
 
-    /// Build a minimal twin for testing graph construction.
-    fn make_test_twin() -> SystemTwin {
-        SystemTwin {
+    /// Build a minimal code model for testing graph construction.
+    fn make_test_model() -> CodeModel {
+        CodeModel {
             version: "1.0".into(),
             project_name: "test".into(),
             components: vec![Component {
@@ -1001,7 +1001,7 @@ mod tests {
                     },
                 ],
             }],
-            stats: TwinStats {
+            stats: CodeModelStats {
                 files_analyzed: 4,
                 total_interfaces: 1,
                 total_dependencies: 0,
@@ -1018,8 +1018,8 @@ mod tests {
     // --- Construction tests ---
 
     #[test]
-    fn constructs_from_empty_twin() {
-        let twin = SystemTwin {
+    fn constructs_from_empty_model() {
+        let model = CodeModel {
             version: "1.0".into(),
             project_name: "empty".into(),
             components: vec![Component {
@@ -1034,7 +1034,7 @@ mod tests {
                 data_models: vec![],
                 module_boundaries: vec![],
             }],
-            stats: TwinStats {
+            stats: CodeModelStats {
                 files_analyzed: 0,
                 total_interfaces: 0,
                 total_dependencies: 0,
@@ -1047,15 +1047,15 @@ mod tests {
             },
         };
 
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let kg = KnowledgeGraph::from_code_model(&model);
         assert_eq!(kg.graph.node_count(), 0);
         assert_eq!(kg.graph.edge_count(), 0);
     }
 
     #[test]
     fn constructs_with_symbols_and_references() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         // Should have nodes for: files, symbols, interface, data model, modules, externals
         assert!(kg.graph.node_count() > 0);
@@ -1071,8 +1071,8 @@ mod tests {
 
     #[test]
     fn deduplicates_nodes_from_multiple_references() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         // getUser appears in two references as source, but should be one node
         let getuser_nodes = kg.find_symbol_nodes("getUser");
@@ -1081,8 +1081,8 @@ mod tests {
 
     #[test]
     fn creates_external_nodes_for_unresolved_targets() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let stats = kg.stats();
         assert!(
@@ -1093,8 +1093,8 @@ mod tests {
 
     #[test]
     fn creates_module_nodes_with_contains_edges() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let stats = kg.stats();
         assert_eq!(
@@ -1110,8 +1110,8 @@ mod tests {
 
     #[test]
     fn creates_defines_edges_for_symbols() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let stats = kg.stats();
         assert!(
@@ -1122,8 +1122,8 @@ mod tests {
 
     #[test]
     fn creates_depends_on_edges_between_modules() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let stats = kg.stats();
         assert!(
@@ -1136,8 +1136,8 @@ mod tests {
 
     #[test]
     fn callers_finds_direct_caller() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let callers = kg.callers("getUser", 1);
         assert!(!callers.is_empty(), "getUser should have callers");
@@ -1149,8 +1149,8 @@ mod tests {
 
     #[test]
     fn callers_finds_transitive_caller() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         // validate is called by getUser, which is called by handler
         let callers = kg.callers("validate", 2);
@@ -1167,8 +1167,8 @@ mod tests {
 
     #[test]
     fn callers_respects_max_depth() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let callers = kg.callers("validate", 1);
         // At depth 1, only getUser should be found (direct caller)
@@ -1177,8 +1177,8 @@ mod tests {
 
     #[test]
     fn callers_returns_empty_for_unknown_symbol() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let callers = kg.callers("nonexistent", 5);
         assert!(callers.is_empty());
@@ -1188,8 +1188,8 @@ mod tests {
 
     #[test]
     fn callees_finds_direct_callee() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let callees = kg.callees("handler", 1);
         assert!(
@@ -1200,8 +1200,8 @@ mod tests {
 
     #[test]
     fn callees_finds_transitive_callees() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let callees = kg.callees("handler", 3);
         let names: Vec<String> = callees
@@ -1221,8 +1221,8 @@ mod tests {
 
     #[test]
     fn impact_analysis_finds_affected_nodes() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let impact = kg.impact_analysis("getUser", 3);
         assert!(
@@ -1237,8 +1237,8 @@ mod tests {
 
     #[test]
     fn impact_analysis_collects_affected_files() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let impact = kg.impact_analysis("getUser", 3);
         assert!(
@@ -1249,8 +1249,8 @@ mod tests {
 
     #[test]
     fn impact_analysis_returns_empty_for_unknown_symbol() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let impact = kg.impact_analysis("nonexistent", 5);
         assert_eq!(impact.total_affected, 0);
@@ -1260,8 +1260,8 @@ mod tests {
 
     #[test]
     fn type_hierarchy_finds_ancestors() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let ancestors = kg.type_hierarchy("AdminService", HierarchyDirection::Ancestors);
         assert!(
@@ -1272,8 +1272,8 @@ mod tests {
 
     #[test]
     fn type_hierarchy_finds_descendants() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let descendants = kg.type_hierarchy("UserService", HierarchyDirection::Descendants);
         assert!(
@@ -1284,8 +1284,8 @@ mod tests {
 
     #[test]
     fn type_hierarchy_both_directions() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let both = kg.type_hierarchy("UserService", HierarchyDirection::Both);
         // Should find ancestors and descendants
@@ -1296,18 +1296,18 @@ mod tests {
 
     #[test]
     fn find_cycles_returns_empty_when_no_cycles() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let cycles = kg.find_cycles();
-        // Our test twin has no cycles
-        assert!(cycles.is_empty(), "test twin should have no cycles");
+        // Our test model has no cycles
+        assert!(cycles.is_empty(), "test model should have no cycles");
     }
 
     #[test]
     fn find_cycles_detects_mutual_recursion() {
-        // Build a twin with a call cycle: A -> B -> A
-        let twin = SystemTwin {
+        // Build a code model with a call cycle: A -> B -> A
+        let model = CodeModel {
             version: "1.0".into(),
             project_name: "cyclic".into(),
             components: vec![Component {
@@ -1360,7 +1360,7 @@ mod tests {
                 data_models: vec![],
                 module_boundaries: vec![],
             }],
-            stats: TwinStats {
+            stats: CodeModelStats {
                 files_analyzed: 2,
                 total_interfaces: 0,
                 total_dependencies: 0,
@@ -1373,14 +1373,14 @@ mod tests {
             },
         };
 
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let kg = KnowledgeGraph::from_code_model(&model);
         let cycles = kg.find_cycles();
         assert!(!cycles.is_empty(), "should detect the A -> B -> A cycle");
     }
 
     #[test]
     fn find_module_cycles_detects_circular_module_deps() {
-        let twin = SystemTwin {
+        let model = CodeModel {
             version: "1.0".into(),
             project_name: "cyclic-modules".into(),
             components: vec![Component {
@@ -1408,7 +1408,7 @@ mod tests {
                     },
                 ],
             }],
-            stats: TwinStats {
+            stats: CodeModelStats {
                 files_analyzed: 0,
                 total_interfaces: 0,
                 total_dependencies: 0,
@@ -1421,7 +1421,7 @@ mod tests {
             },
         };
 
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let kg = KnowledgeGraph::from_code_model(&model);
         let cycles = kg.find_module_cycles();
         assert!(!cycles.is_empty(), "should detect auth <-> users cycle");
         assert!(
@@ -1435,8 +1435,8 @@ mod tests {
 
     #[test]
     fn stats_counts_are_accurate() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let stats = kg.stats();
         assert_eq!(stats.total_nodes, kg.graph.node_count());
@@ -1449,8 +1449,8 @@ mod tests {
 
     #[test]
     fn to_json_produces_valid_structure() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let json = kg.to_json();
         assert!(json.get("nodes").is_some(), "should have nodes array");
@@ -1480,7 +1480,7 @@ mod tests {
     #[test]
     fn handles_self_referencing_symbol() {
         // A recursive function calls itself
-        let twin = SystemTwin {
+        let model = CodeModel {
             version: "1.0".into(),
             project_name: "self-ref".into(),
             components: vec![Component {
@@ -1511,7 +1511,7 @@ mod tests {
                 data_models: vec![],
                 module_boundaries: vec![],
             }],
-            stats: TwinStats {
+            stats: CodeModelStats {
                 files_analyzed: 1,
                 total_interfaces: 0,
                 total_dependencies: 0,
@@ -1524,7 +1524,7 @@ mod tests {
             },
         };
 
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let kg = KnowledgeGraph::from_code_model(&model);
         // Should not infinite loop
         let callers = kg.callers("fibonacci", 5);
         // Self-call: fibonacci calls fibonacci, but visited set prevents infinite loop
@@ -1534,8 +1534,8 @@ mod tests {
 
     #[test]
     fn exposes_edge_links_module_to_exported_symbol() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let stats = kg.stats();
         assert!(
@@ -1546,8 +1546,8 @@ mod tests {
 
     #[test]
     fn imports_edge_connects_files() {
-        let twin = make_test_twin();
-        let kg = KnowledgeGraph::from_twin(&twin);
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
 
         let stats = kg.stats();
         assert!(

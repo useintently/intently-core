@@ -1,11 +1,11 @@
-//! Twin builder: aggregates per-file extractions into a SystemTwin.
+//! CodeModel builder: aggregates per-file extractions into a CodeModel.
 //!
 //! MVP simplification: all files belong to a single Component.
 //! The builder sorts all collections for deterministic JSON output.
 //!
-//! `TwinBuilder` supports incremental updates: when a file changes,
+//! `CodeModelBuilder` supports incremental updates: when a file changes,
 //! call `set_file` to replace its contributions without rebuilding
-//! the entire twin from scratch.
+//! the entire code model from scratch.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use super::types::*;
 use crate::parser::SupportedLanguage;
 
-/// Tracks what a single file contributed to the twin.
+/// Tracks what a single file contributed to the code model.
 #[derive(Debug, Clone)]
 struct FileContribution {
     language: SupportedLanguage,
@@ -26,21 +26,21 @@ struct FileContribution {
     data_models: Vec<DataModel>,
 }
 
-/// Incremental twin builder that tracks per-file contributions.
+/// Incremental code model builder that tracks per-file contributions.
 ///
-/// Instead of rebuilding the entire twin on every change, `TwinBuilder`
+/// Instead of rebuilding the entire code model on every change, `CodeModelBuilder`
 /// maintains a map of what each file contributed (interfaces, deps, sinks,
 /// symbols). When a file changes, only its contributions are replaced.
 ///
 /// During `build()`, post-processing runs import resolution and module
 /// boundary inference across all aggregated contributions.
-pub struct TwinBuilder {
+pub struct CodeModelBuilder {
     project_name: String,
     project_root: PathBuf,
     contributions: HashMap<PathBuf, FileContribution>,
 }
 
-impl TwinBuilder {
+impl CodeModelBuilder {
     /// Create a new empty builder.
     pub fn new(project_name: &str) -> Self {
         Self {
@@ -92,12 +92,12 @@ impl TwinBuilder {
         self.contributions.remove(path);
     }
 
-    /// Produce a sorted, deterministic SystemTwin snapshot.
+    /// Produce a sorted, deterministic CodeModel snapshot.
     ///
     /// After aggregating per-file contributions, runs two post-processing steps:
     /// 1. **Import resolution** — resolves relative imports to target files/symbols
     /// 2. **Module inference** — groups files into logical modules with dependencies
-    pub fn build(&self) -> SystemTwin {
+    pub fn build(&self) -> CodeModel {
         let mut interfaces = Vec::new();
         let mut dependencies = Vec::new();
         let mut sinks = Vec::new();
@@ -155,7 +155,7 @@ impl TwinBuilder {
 
         let language = dominant_language_from_counts(&lang_counts);
 
-        let stats = TwinStats {
+        let stats = CodeModelStats {
             files_analyzed: self.contributions.len(),
             total_interfaces: interfaces.len(),
             total_dependencies: dependencies.len(),
@@ -180,7 +180,7 @@ impl TwinBuilder {
             module_boundaries,
         };
 
-        SystemTwin {
+        CodeModel {
             version: "1.0".into(),
             project_name: self.project_name.clone(),
             components: vec![component],
@@ -189,13 +189,13 @@ impl TwinBuilder {
     }
 }
 
-/// Build a SystemTwin from a set of per-file extractions.
+/// Build a CodeModel from a set of per-file extractions.
 ///
-/// Convenience wrapper around `TwinBuilder::from_extractions(...).build()`.
+/// Convenience wrapper around `CodeModelBuilder::from_extractions(...).build()`.
 /// All extractions are merged into a single Component (MVP assumption:
 /// one project = one service). Collections are sorted for determinism.
-pub fn build_twin(extractions: &[FileExtraction], project_name: &str) -> SystemTwin {
-    TwinBuilder::from_extractions(extractions, project_name).build()
+pub fn build_code_model(extractions: &[FileExtraction], project_name: &str) -> CodeModel {
+    CodeModelBuilder::from_extractions(extractions, project_name).build()
 }
 
 /// Determine the most common language from a frequency map.
@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_twin_from_single_extraction() {
+    fn builds_model_from_single_extraction() {
         let ext = make_extraction(
             "src/index.ts",
             vec![Interface {
@@ -253,13 +253,13 @@ mod tests {
             vec![],
         );
 
-        let twin = build_twin(&[ext], "test-project");
+        let model = build_code_model(&[ext], "test-project");
 
-        assert_eq!(twin.project_name, "test-project");
-        assert_eq!(twin.components.len(), 1);
-        assert_eq!(twin.components[0].interfaces.len(), 1);
-        assert_eq!(twin.stats.files_analyzed, 1);
-        assert_eq!(twin.stats.total_interfaces, 1);
+        assert_eq!(model.project_name, "test-project");
+        assert_eq!(model.components.len(), 1);
+        assert_eq!(model.components[0].interfaces.len(), 1);
+        assert_eq!(model.stats.files_analyzed, 1);
+        assert_eq!(model.stats.total_interfaces, 1);
     }
 
     #[test]
@@ -290,20 +290,20 @@ mod tests {
             }],
         );
 
-        let twin = build_twin(&[ext1, ext2], "my-app");
+        let model = build_code_model(&[ext1, ext2], "my-app");
 
-        assert_eq!(twin.stats.files_analyzed, 2);
-        assert_eq!(twin.stats.total_interfaces, 2);
-        assert_eq!(twin.stats.total_sinks, 1);
+        assert_eq!(model.stats.files_analyzed, 2);
+        assert_eq!(model.stats.total_interfaces, 2);
+        assert_eq!(model.stats.total_sinks, 1);
     }
 
     #[test]
-    fn empty_extractions_produce_empty_twin() {
-        let twin = build_twin(&[], "empty");
+    fn empty_extractions_produce_empty_model() {
+        let model = build_code_model(&[], "empty");
 
-        assert_eq!(twin.components.len(), 1);
-        assert!(twin.components[0].interfaces.is_empty());
-        assert_eq!(twin.stats.files_analyzed, 0);
+        assert_eq!(model.components.len(), 1);
+        assert!(model.components[0].interfaces.is_empty());
+        assert_eq!(model.stats.files_analyzed, 0);
     }
 
     #[test]
@@ -329,8 +329,8 @@ mod tests {
             vec![],
         );
 
-        let twin1 = build_twin(&[ext_a.clone(), ext_b.clone()], "proj");
-        let twin2 = build_twin(&[ext_b, ext_a], "proj");
+        let twin1 = build_code_model(&[ext_a.clone(), ext_b.clone()], "proj");
+        let twin2 = build_code_model(&[ext_b, ext_a], "proj");
 
         let json1 = serde_json::to_string(&twin1).unwrap();
         let json2 = serde_json::to_string(&twin2).unwrap();
@@ -376,19 +376,19 @@ mod tests {
             data_models: vec![],
         };
 
-        let twin = build_twin(&[ext], "proj");
+        let model = build_code_model(&[ext], "proj");
 
-        assert_eq!(twin.stats.files_analyzed, 1);
-        assert_eq!(twin.stats.total_interfaces, 2);
-        assert_eq!(twin.stats.total_dependencies, 1);
-        assert_eq!(twin.stats.total_sinks, 1);
+        assert_eq!(model.stats.files_analyzed, 1);
+        assert_eq!(model.stats.total_interfaces, 2);
+        assert_eq!(model.stats.total_dependencies, 1);
+        assert_eq!(model.stats.total_sinks, 1);
     }
 
-    // --- TwinBuilder incremental tests ---
+    // --- CodeModelBuilder incremental tests ---
 
     #[test]
-    fn twin_builder_set_file_adds_contributions() {
-        let mut builder = TwinBuilder::new("proj");
+    fn model_builder_set_file_adds_contributions() {
+        let mut builder = CodeModelBuilder::new("proj");
         let ext = make_extraction(
             "src/a.ts",
             vec![Interface {
@@ -400,15 +400,15 @@ mod tests {
             vec![],
         );
         builder.set_file(&ext);
-        let twin = builder.build();
+        let model = builder.build();
 
-        assert_eq!(twin.components[0].interfaces.len(), 1);
-        assert_eq!(twin.stats.files_analyzed, 1);
+        assert_eq!(model.components[0].interfaces.len(), 1);
+        assert_eq!(model.stats.files_analyzed, 1);
     }
 
     #[test]
-    fn twin_builder_set_file_replaces_old_contributions() {
-        let mut builder = TwinBuilder::new("proj");
+    fn model_builder_set_file_replaces_old_contributions() {
+        let mut builder = CodeModelBuilder::new("proj");
 
         // Initial extraction with route /old
         let ext_v1 = make_extraction(
@@ -436,15 +436,15 @@ mod tests {
         );
         builder.set_file(&ext_v2);
 
-        let twin = builder.build();
-        assert_eq!(twin.components[0].interfaces.len(), 1);
-        assert_eq!(twin.components[0].interfaces[0].path, "/new");
-        assert_eq!(twin.stats.files_analyzed, 1);
+        let model = builder.build();
+        assert_eq!(model.components[0].interfaces.len(), 1);
+        assert_eq!(model.components[0].interfaces[0].path, "/new");
+        assert_eq!(model.stats.files_analyzed, 1);
     }
 
     #[test]
-    fn twin_builder_remove_file_clears_contributions() {
-        let mut builder = TwinBuilder::new("proj");
+    fn model_builder_remove_file_clears_contributions() {
+        let mut builder = CodeModelBuilder::new("proj");
         let ext = make_extraction(
             "src/gone.ts",
             vec![Interface {
@@ -459,13 +459,13 @@ mod tests {
         assert_eq!(builder.build().components[0].interfaces.len(), 1);
 
         builder.remove_file(Path::new("src/gone.ts"));
-        let twin = builder.build();
-        assert!(twin.components[0].interfaces.is_empty());
-        assert_eq!(twin.stats.files_analyzed, 0);
+        let model = builder.build();
+        assert!(model.components[0].interfaces.is_empty());
+        assert_eq!(model.stats.files_analyzed, 0);
     }
 
     #[test]
-    fn twin_builder_matches_build_twin_output() {
+    fn model_builder_matches_build_code_model_output() {
         let ext1 = make_extraction(
             "src/a.ts",
             vec![Interface {
@@ -492,18 +492,18 @@ mod tests {
             }],
         );
 
-        let from_build_twin = build_twin(&[ext1.clone(), ext2.clone()], "proj");
+        let from_build_code_model = build_code_model(&[ext1.clone(), ext2.clone()], "proj");
         let from_builder =
-            TwinBuilder::from_extractions(&[ext1, ext2], "proj").build();
+            CodeModelBuilder::from_extractions(&[ext1, ext2], "proj").build();
 
-        let json1 = serde_json::to_string(&from_build_twin).unwrap();
+        let json1 = serde_json::to_string(&from_build_code_model).unwrap();
         let json2 = serde_json::to_string(&from_builder).unwrap();
-        assert_eq!(json1, json2, "TwinBuilder must produce identical output to build_twin");
+        assert_eq!(json1, json2, "CodeModelBuilder must produce identical output to build_code_model");
     }
 
     #[test]
-    fn twin_builder_symbols_tracked_incrementally() {
-        let mut builder = TwinBuilder::new("proj");
+    fn model_builder_symbols_tracked_incrementally() {
+        let mut builder = CodeModelBuilder::new("proj");
         let ext = FileExtraction {
             file: PathBuf::from("src/lib.ts"),
             language: SupportedLanguage::TypeScript,
@@ -535,20 +535,20 @@ mod tests {
             data_models: vec![],
         };
         builder.set_file(&ext);
-        let twin = builder.build();
+        let model = builder.build();
 
-        assert_eq!(twin.stats.total_symbols, 2);
-        assert_eq!(twin.components[0].symbols.len(), 2);
+        assert_eq!(model.stats.total_symbols, 2);
+        assert_eq!(model.components[0].symbols.len(), 2);
 
         builder.remove_file(Path::new("src/lib.ts"));
-        let twin = builder.build();
-        assert_eq!(twin.stats.total_symbols, 0);
-        assert!(twin.components[0].symbols.is_empty());
+        let model = builder.build();
+        assert_eq!(model.stats.total_symbols, 0);
+        assert!(model.components[0].symbols.is_empty());
     }
 
     #[test]
-    fn twin_builder_imports_preserved_and_sorted() {
-        let mut builder = TwinBuilder::new("proj");
+    fn model_builder_imports_preserved_and_sorted() {
+        let mut builder = CodeModelBuilder::new("proj");
         let ext = FileExtraction {
             file: PathBuf::from("src/app.ts"),
             language: SupportedLanguage::TypeScript,
@@ -572,18 +572,18 @@ mod tests {
             data_models: vec![],
         };
         builder.set_file(&ext);
-        let twin = builder.build();
+        let model = builder.build();
 
-        assert_eq!(twin.stats.total_imports, 2);
-        assert_eq!(twin.components[0].imports.len(), 2);
+        assert_eq!(model.stats.total_imports, 2);
+        assert_eq!(model.components[0].imports.len(), 2);
         // Sorted by (source, line): axios before express
-        assert_eq!(twin.components[0].imports[0].source, "axios");
-        assert_eq!(twin.components[0].imports[1].source, "express");
+        assert_eq!(model.components[0].imports[0].source, "axios");
+        assert_eq!(model.components[0].imports[1].source, "express");
     }
 
     #[test]
-    fn twin_builder_imports_removed_on_file_delete() {
-        let mut builder = TwinBuilder::new("proj");
+    fn model_builder_imports_removed_on_file_delete() {
+        let mut builder = CodeModelBuilder::new("proj");
         let ext = FileExtraction {
             file: PathBuf::from("src/a.ts"),
             language: SupportedLanguage::TypeScript,
@@ -603,14 +603,14 @@ mod tests {
         assert_eq!(builder.build().stats.total_imports, 1);
 
         builder.remove_file(Path::new("src/a.ts"));
-        let twin = builder.build();
-        assert_eq!(twin.stats.total_imports, 0);
-        assert!(twin.components[0].imports.is_empty());
+        let model = builder.build();
+        assert_eq!(model.stats.total_imports, 0);
+        assert!(model.components[0].imports.is_empty());
     }
 
     #[test]
-    fn twin_builder_imports_aggregated_from_multiple_files() {
-        let mut builder = TwinBuilder::new("proj");
+    fn model_builder_imports_aggregated_from_multiple_files() {
+        let mut builder = CodeModelBuilder::new("proj");
         let ext1 = FileExtraction {
             file: PathBuf::from("src/a.ts"),
             language: SupportedLanguage::TypeScript,
@@ -643,9 +643,9 @@ mod tests {
         };
         builder.set_file(&ext1);
         builder.set_file(&ext2);
-        let twin = builder.build();
+        let model = builder.build();
 
-        assert_eq!(twin.stats.total_imports, 2);
-        assert_eq!(twin.components[0].imports.len(), 2);
+        assert_eq!(model.stats.total_imports, 2);
+        assert_eq!(model.components[0].imports.len(), 2);
     }
 }

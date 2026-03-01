@@ -1,4 +1,4 @@
-//! Core data types for the System Twin intermediate representation.
+//! Core data types for the CodeModel intermediate representation.
 //!
 //! These types model a codebase at a semantic level — services, APIs,
 //! dependencies, and observable sinks — rather than at the file/line level.
@@ -65,13 +65,13 @@ impl SourceAnchor {
     }
 }
 
-/// The System Twin: a semantic snapshot of the entire codebase.
+/// The CodeModel: a semantic snapshot of the entire codebase.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SystemTwin {
+pub struct CodeModel {
     pub version: String,
     pub project_name: String,
     pub components: Vec<Component>,
-    pub stats: TwinStats,
+    pub stats: CodeModelStats,
 }
 
 /// A logical component (service, library, module) in the system.
@@ -339,9 +339,9 @@ pub struct ModuleBoundary {
 // Aggregate statistics
 // ---------------------------------------------------------------------------
 
-/// Aggregate statistics about the twin.
+/// Aggregate statistics about the code model.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TwinStats {
+pub struct CodeModelStats {
     pub files_analyzed: usize,
     pub total_interfaces: usize,
     pub total_dependencies: usize,
@@ -380,8 +380,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn system_twin_round_trip_serialization() {
-        let twin = SystemTwin {
+    fn code_model_round_trip_serialization() {
+        let model = CodeModel {
             version: "1.0".into(),
             project_name: "test-project".into(),
             components: vec![Component {
@@ -401,7 +401,7 @@ mod tests {
                 data_models: vec![],
                 module_boundaries: vec![],
             }],
-            stats: TwinStats {
+            stats: CodeModelStats {
                 files_analyzed: 1,
                 total_interfaces: 1,
                 total_dependencies: 0,
@@ -414,9 +414,9 @@ mod tests {
             },
         };
 
-        let json = serde_json::to_string(&twin).unwrap();
-        let deserialized: SystemTwin = serde_json::from_str(&json).unwrap();
-        assert_eq!(twin, deserialized);
+        let json = serde_json::to_string(&model).unwrap();
+        let deserialized: CodeModel = serde_json::from_str(&json).unwrap();
+        assert_eq!(model, deserialized);
     }
 
     #[test]

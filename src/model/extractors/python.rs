@@ -16,8 +16,8 @@ use std::path::Path;
 use tree_sitter::{Node, Tree};
 
 use crate::parser::SupportedLanguage;
-use crate::twin::patterns;
-use crate::twin::types::*;
+use crate::model::patterns;
+use crate::model::types::*;
 
 use super::common::{self, anchor_from_node, extract_string_value, node_text, truncate_call_text};
 

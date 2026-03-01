@@ -14,7 +14,7 @@ Keywords: "semantic diff review", "review diff", "semantic diff", "behavioral di
 ## What This Skill Does
 
 1. **Behavioral vs Textual** — Verify diff is semantic, not line-based
-   - Diff operates on the IR (System Twin), not on raw source text
+   - Diff operates on the IR (CodeModel), not on raw source text
    - Whitespace, formatting, and comment changes produce empty diffs
    - Renamed symbols with same behavior produce rename-only diffs
 

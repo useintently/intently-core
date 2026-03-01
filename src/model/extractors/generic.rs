@@ -7,14 +7,14 @@
 //! Does NOT extract routes, HTTP calls, or imports — those require
 //! framework-specific knowledge that belongs in dedicated extractors.
 //! This extractor ensures every parsed file contributes at least
-//! log-sink and PII data to the System Twin.
+//! log-sink and PII data to the CodeModel.
 
 use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
 use crate::parser::SupportedLanguage;
-use crate::twin::types::*;
+use crate::model::types::*;
 
 use super::common::{self, is_call_node, try_extract_log_sink};
 

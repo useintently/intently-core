@@ -16,7 +16,7 @@ use std::path::Path;
 use tree_sitter::{Node, Tree};
 
 use crate::parser::SupportedLanguage;
-use crate::twin::types::{DataModel, DataModelKind, FieldInfo, Visibility};
+use crate::model::types::{DataModel, DataModelKind, FieldInfo, Visibility};
 
 use super::common::{anchor_from_node, node_text};
 

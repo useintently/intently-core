@@ -1,7 +1,7 @@
 //! IntentlyEngine: the stateful orchestrator for realtime code extraction.
 //!
 //! Maintains in-memory caches for parsed files and extractions.
-//! On file change, re-parses only the changed file, rebuilds the twin
+//! On file change, re-parses only the changed file, rebuilds the code model
 //! from all cached extractions, and builds the knowledge graph.
 //!
 //! This engine is purely extractive — it answers "what does this codebase
@@ -18,11 +18,11 @@ use walkdir::WalkDir;
 
 use crate::error::{IntentlyError, Result};
 use crate::parser;
-use crate::twin::builder::TwinBuilder;
-use crate::twin::diff::{self, SemanticDiff};
-use crate::twin::extractors;
-use crate::twin::graph::{GraphStats, KnowledgeGraph};
-use crate::twin::types::{FileExtraction, SystemTwin};
+use crate::model::builder::CodeModelBuilder;
+use crate::model::diff::{self, SemanticDiff};
+use crate::model::extractors;
+use crate::model::graph::{GraphStats, KnowledgeGraph};
+use crate::model::types::{FileExtraction, CodeModel};
 
 /// Directories to skip during file discovery.
 const IGNORED_DIRS: &[&str] = &[
@@ -45,20 +45,20 @@ const IGNORED_DIRS: &[&str] = &[
 pub struct PipelineTiming {
     /// Time spent parsing and extracting semantic information from source files.
     pub parse_extract_ms: u64,
-    /// Time spent building the System Twin from per-file contributions.
-    pub twin_build_ms: u64,
+    /// Time spent building the CodeModel from per-file contributions.
+    pub model_build_ms: u64,
     /// Total wall-clock time for the entire extraction pipeline.
     pub total_ms: u64,
 }
 
 /// Result of a full or incremental extraction pass.
 ///
-/// Contains the System Twin, semantic diff, knowledge graph stats,
+/// Contains the CodeModel, semantic diff, knowledge graph stats,
 /// and timing information. Does NOT contain policy or health data —
 /// those are governance concerns for downstream consumers.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ExtractionResult {
-    pub twin: SystemTwin,
+    pub model: CodeModel,
     pub diff: Option<SemanticDiff>,
     pub timing: PipelineTiming,
     pub graph_stats: Option<GraphStats>,
@@ -68,23 +68,23 @@ pub struct ExtractionResult {
 
 /// The stateful Intently extraction engine.
 ///
-/// Manages parsing, extraction, twin building, and knowledge graph
+/// Manages parsing, extraction, model building, and knowledge graph
 /// construction with incremental caching for real-time performance.
 pub struct IntentlyEngine {
     project_root: PathBuf,
     project_name: String,
     source_cache: HashMap<PathBuf, String>,
     extraction_cache: HashMap<PathBuf, FileExtraction>,
-    previous_twin: Option<SystemTwin>,
+    previous_model: Option<CodeModel>,
     /// Cached tree-sitter CSTs for incremental re-parsing.
     /// When a file is re-parsed, the old tree enables tree-sitter to reuse
     /// unchanged nodes, reducing parse time from O(file_size) to O(edit_size).
     tree_cache: HashMap<PathBuf, tree_sitter::Tree>,
-    /// Incremental twin builder tracking per-file contributions.
+    /// Incremental code model builder tracking per-file contributions.
     /// Instead of rebuilding from all cached extractions, updates are applied
     /// as deltas (set_file/remove_file) for O(1) incremental changes.
-    twin_builder: TwinBuilder,
-    /// Derived knowledge graph built from the SystemTwin after each extraction.
+    model_builder: CodeModelBuilder,
+    /// Derived knowledge graph built from the CodeModel after each extraction.
     /// Provides O(1) adjacency lookups for callers/callees/impact analysis
     /// and structural analysis (cycle detection).
     knowledge_graph: Option<KnowledgeGraph>,
@@ -99,20 +99,20 @@ impl IntentlyEngine {
             .unwrap_or("unknown")
             .to_string();
 
-        let twin_builder = TwinBuilder::with_root(&project_name, &project_root);
+        let model_builder = CodeModelBuilder::with_root(&project_name, &project_root);
         Self {
             project_root,
             project_name,
             source_cache: HashMap::new(),
             extraction_cache: HashMap::new(),
-            previous_twin: None,
+            previous_model: None,
             tree_cache: HashMap::new(),
-            twin_builder,
+            model_builder,
             knowledge_graph: None,
         }
     }
 
-    /// Run a full extraction: discover all files, parse, extract, build twin.
+    /// Run a full extraction: discover all files, parse, extract, build code model.
     #[instrument(skip(self), fields(project = %self.project_name))]
     pub fn full_analysis(&mut self) -> Result<ExtractionResult> {
         let start = Instant::now();
@@ -136,14 +136,14 @@ impl IntentlyEngine {
             .collect();
         let parse_extract_ms = parse_start.elapsed().as_millis() as u64;
 
-        // Populate caches and twin builder
+        // Populate caches and model builder
         self.source_cache.clear();
         self.extraction_cache.clear();
         self.tree_cache.clear();
-        self.twin_builder = TwinBuilder::with_root(&self.project_name, &self.project_root);
+        self.model_builder = CodeModelBuilder::with_root(&self.project_name, &self.project_root);
         for (path, source, extraction, tree) in results {
             self.source_cache.insert(path.clone(), source);
-            self.twin_builder.set_file(&extraction);
+            self.model_builder.set_file(&extraction);
             self.extraction_cache.insert(path.clone(), extraction);
             self.tree_cache.insert(path, tree);
         }
@@ -167,7 +167,7 @@ impl IntentlyEngine {
         match self.parse_and_extract(&abs_path, old_tree.as_ref()) {
             Ok((path, source, extraction, tree)) => {
                 self.source_cache.insert(path.clone(), source);
-                self.twin_builder.set_file(&extraction);
+                self.model_builder.set_file(&extraction);
                 self.extraction_cache.insert(path.clone(), extraction);
                 self.tree_cache.insert(path, tree);
             }
@@ -176,7 +176,7 @@ impl IntentlyEngine {
                 self.source_cache.remove(&abs_path);
                 self.extraction_cache.remove(&abs_path);
                 self.tree_cache.remove(&abs_path);
-                self.twin_builder.remove_file(&abs_path);
+                self.model_builder.remove_file(&abs_path);
             }
         }
         let parse_extract_ms = parse_start.elapsed().as_millis() as u64;
@@ -195,7 +195,7 @@ impl IntentlyEngine {
         self.source_cache.remove(&abs_path);
         self.extraction_cache.remove(&abs_path);
         self.tree_cache.remove(&abs_path);
-        self.twin_builder.remove_file(&abs_path);
+        self.model_builder.remove_file(&abs_path);
 
         // No parse/extract on deletion
         self.build_result(start, 0)
@@ -213,7 +213,7 @@ impl IntentlyEngine {
             match self.parse_and_extract(&abs_path, old_tree.as_ref()) {
                 Ok((p, source, extraction, tree)) => {
                     self.source_cache.insert(p.clone(), source);
-                    self.twin_builder.set_file(&extraction);
+                    self.model_builder.set_file(&extraction);
                     self.extraction_cache.insert(p.clone(), extraction);
                     self.tree_cache.insert(p, tree);
                 }
@@ -222,7 +222,7 @@ impl IntentlyEngine {
                     self.source_cache.remove(&abs_path);
                     self.extraction_cache.remove(&abs_path);
                     self.tree_cache.remove(&abs_path);
-                    self.twin_builder.remove_file(&abs_path);
+                    self.model_builder.remove_file(&abs_path);
                 }
             }
         }
@@ -355,25 +355,25 @@ impl IntentlyEngine {
         start: Instant,
         parse_extract_ms: u64,
     ) -> Result<ExtractionResult> {
-        let twin_start = Instant::now();
-        let twin = self.twin_builder.build();
-        let twin_build_ms = twin_start.elapsed().as_millis() as u64;
+        let model_start = Instant::now();
+        let model = self.model_builder.build();
+        let model_build_ms = model_start.elapsed().as_millis() as u64;
 
-        // Build knowledge graph from twin (derived view for traversal)
-        let graph = KnowledgeGraph::from_twin(&twin);
+        // Build knowledge graph from code model (derived view for traversal)
+        let graph = KnowledgeGraph::from_code_model(&model);
         let graph_stats = Some(graph.stats());
         self.knowledge_graph = Some(graph);
 
         let semantic_diff = self
-            .previous_twin
+            .previous_model
             .as_ref()
-            .map(|prev| diff::compute_diff(prev, &twin));
+            .map(|prev| diff::compute_diff(prev, &model));
 
         let total_ms = start.elapsed().as_millis() as u64;
 
         let timing = PipelineTiming {
             parse_extract_ms,
-            twin_build_ms,
+            model_build_ms,
             total_ms,
         };
 
@@ -381,16 +381,16 @@ impl IntentlyEngine {
 
         debug!(
             parse_extract_ms,
-            twin_build_ms,
+            model_build_ms,
             total_ms,
             "pipeline timing"
         );
         info!(duration_ms = total_ms, files_analyzed, "extraction complete");
 
-        self.previous_twin = Some(twin.clone());
+        self.previous_model = Some(model.clone());
 
         Ok(ExtractionResult {
-            twin,
+            model,
             diff: semantic_diff,
             timing,
             graph_stats,
@@ -450,7 +450,7 @@ app.get('/health', (req, res) => res.json({ ok: true }));
         let result = engine.full_analysis().unwrap();
 
         assert_eq!(result.files_analyzed, 1);
-        assert_eq!(result.twin.components[0].interfaces.len(), 1);
+        assert_eq!(result.model.components[0].interfaces.len(), 1);
         assert!(result.diff.is_none(), "first analysis has no diff");
     }
 
@@ -465,7 +465,7 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 
         let mut engine = IntentlyEngine::new(dir.path().to_path_buf());
         let first = engine.full_analysis().unwrap();
-        assert_eq!(first.twin.components[0].interfaces.len(), 1);
+        assert_eq!(first.model.components[0].interfaces.len(), 1);
 
         // Add a new endpoint
         std::fs::write(
@@ -482,7 +482,7 @@ app.post('/api/users', (req, res) => res.status(201).json({}));
             .on_file_changed(Path::new("src/app.ts"))
             .unwrap();
 
-        assert_eq!(second.twin.components[0].interfaces.len(), 2);
+        assert_eq!(second.model.components[0].interfaces.len(), 2);
         assert!(second.diff.is_some(), "second analysis should have a diff");
 
         let diff = second.diff.unwrap();
@@ -493,7 +493,7 @@ app.post('/api/users', (req, res) => res.status(201).json({}));
     }
 
     #[test]
-    fn file_deletion_removes_from_twin() {
+    fn file_deletion_removes_from_code_model() {
         let dir = create_project(&[
             ("src/a.ts", r#"
 const app = require('express')();
@@ -507,13 +507,13 @@ router.get('/b', (req, res) => res.json({}));
 
         let mut engine = IntentlyEngine::new(dir.path().to_path_buf());
         let result = engine.full_analysis().unwrap();
-        assert_eq!(result.twin.components[0].interfaces.len(), 2);
+        assert_eq!(result.model.components[0].interfaces.len(), 2);
 
         let result = engine
             .on_file_deleted(&dir.path().join("src/b.ts"))
             .unwrap();
-        assert_eq!(result.twin.components[0].interfaces.len(), 1);
-        assert_eq!(result.twin.components[0].interfaces[0].path, "/a");
+        assert_eq!(result.model.components[0].interfaces.len(), 1);
+        assert_eq!(result.model.components[0].interfaces[0].path, "/a");
     }
 
     #[test]
@@ -561,7 +561,7 @@ router.get('/b', (req, res) => res.json({}));
             ])
             .unwrap();
 
-        let paths: Vec<&str> = result.twin.components[0]
+        let paths: Vec<&str> = result.model.components[0]
             .interfaces
             .iter()
             .map(|i| i.path.as_str())
@@ -578,7 +578,7 @@ router.get('/b', (req, res) => res.json({}));
         let result = engine.full_analysis().unwrap();
 
         assert_eq!(result.files_analyzed, 0);
-        assert!(result.twin.components[0].interfaces.is_empty());
+        assert!(result.model.components[0].interfaces.is_empty());
     }
 
     #[test]
@@ -613,7 +613,7 @@ app.get('/health', (req, res) => res.json({ ok: true }));
         let result = engine.full_analysis().unwrap();
 
         let json = serde_json::to_string_pretty(&result).unwrap();
-        assert!(json.contains("twin"));
+        assert!(json.contains("model"));
         assert!(json.contains("timing"));
     }
 

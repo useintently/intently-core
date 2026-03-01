@@ -10,7 +10,7 @@ use std::path::Path;
 use tree_sitter::{Node, Tree};
 
 use crate::parser::SupportedLanguage;
-use crate::twin::types::{Reference, ReferenceKind, Symbol};
+use crate::model::types::{Reference, ReferenceKind, Symbol};
 
 use super::common::{is_call_node, node_text};
 

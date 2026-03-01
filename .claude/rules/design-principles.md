@@ -26,7 +26,7 @@ Non-negotiable design principles for all intently-core contributions, adapted fo
 ## DRY — Don't Repeat Yourself
 - DRY applies to knowledge and business logic, NOT lines of code
 - Rule of 3: extract only when the same knowledge appears a third time
-- Centralize shared types in `twin/types.rs`
+- Centralize shared types in `model/types.rs`
 - Centralize cross-language patterns in `extractors/common.rs`
 - NEVER force DRY when it creates fragile coupling between unrelated modules
 
@@ -34,7 +34,7 @@ Non-negotiable design principles for all intently-core contributions, adapted fo
 
 ### SRP — Single Responsibility
 - Each module has ONE reason to change, owned by ONE domain area
-- `engine.rs` orchestrates; `twin/` builds IR; `parser/` parses; `search/` searches
+- `engine.rs` orchestrates; `model/` builds IR; `parser/` parses; `search/` searches
 - If you need "and" to describe what a module does, split it
 
 ### OCP — Open/Closed
@@ -48,7 +48,7 @@ Non-negotiable design principles for all intently-core contributions, adapted fo
 - If a type cannot fulfill a trait fully, it should not implement that trait
 
 ### ISP — Interface Segregation
-- Small, focused traits: `DiffComputer`, `TwinBuilder`
+- Small, focused traits: `DiffComputer`, `CodeModelBuilder`
 - Consumers depend only on the traits they use — not on a monolithic engine interface
 - Prefer multiple small traits over one large trait with optional methods
 

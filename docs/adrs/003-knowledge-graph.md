@@ -21,7 +21,7 @@ This approach is:
 
 ## Decision
 
-Add a `KnowledgeGraph` type backed by `petgraph::DiGraph` as a **derived view** over the SystemTwin. The graph is built from existing extraction data — no new extraction needed.
+Add a `KnowledgeGraph` type backed by `petgraph::DiGraph` as a **derived view** over the CodeModel. The graph is built from existing extraction data — no new extraction needed.
 
 ### Why petgraph
 
@@ -34,7 +34,7 @@ Add a `KnowledgeGraph` type backed by `petgraph::DiGraph` as a **derived view** 
 
 ### Graph as Derived View
 
-The `KnowledgeGraph` is NOT a separate storage layer. It is **computed from** the `SystemTwin` after every build. The twin remains the source of truth. The graph is a view optimized for traversal queries and structural analysis.
+The `KnowledgeGraph` is NOT a separate storage layer. It is **computed from** the `CodeModel` after every build. The twin remains the source of truth. The graph is a view optimized for traversal queries and structural analysis.
 
 ```
 parse/extract → twin build → GRAPH BUILD → policy eval (ARC-001) → health

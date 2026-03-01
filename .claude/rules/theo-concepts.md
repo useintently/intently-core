@@ -6,22 +6,22 @@ Core domain concepts of the intently-core extraction library. This is the founda
 
 intently-core is an **extraction-only** library. It analyzes source code and produces structured semantic representations. It does NOT evaluate policies, compute health scores, or make governance decisions. Those are responsibilities of downstream consumers.
 
-## System Twin (IR)
+## CodeModel (IR)
 - Semantic intermediate representation of the entire codebase
 - Contains: components, interfaces (routes), dependencies (HTTP calls), sinks (log calls), symbols, data models, imports, module boundaries
 - Built by the Core Engine through static analysis of source code via tree-sitter
 - NOT a 1:1 mapping of files — it captures behavioral semantics, not syntax
-- The Twin is regenerated on every relevant code change
-- Produced by `TwinBuilder` with incremental per-file updates
+- The CodeModel is regenerated on every relevant code change
+- Produced by `CodeModelBuilder` with incremental per-file updates
 
 ## FileExtraction
 - Per-file extraction result containing all semantic data found in a single source file
 - Contains: interfaces, dependencies, sinks, symbols, references, data models, module boundaries, imports
 - Each artifact carries a `SourceAnchor` with precise tree-sitter position data
-- FileExtractions are aggregated by `TwinBuilder` into the System Twin
+- FileExtractions are aggregated by `CodeModelBuilder` into the CodeModel
 
 ## Semantic Diff
-- Computes the behavioral delta between two System Twin states
+- Computes the behavioral delta between two CodeModel states
 - Captures: added/removed/modified components, changed contracts, new dependencies
 - This is NOT a textual diff — it understands what changed semantically
 - A diff with zero semantic impact may still have textual changes (formatting, comments)
@@ -34,7 +34,7 @@ intently-core is an **extraction-only** library. It analyzes source code and pro
 
 ## ExtractionResult
 - The main output type of `IntentlyEngine`
-- Contains: `twin` (SystemTwin), `diff` (Option<SemanticDiff>), `timing` (PipelineTiming), `graph_stats` (Option<GraphStats>)
+- Contains: `model` (CodeModel), `diff` (Option<SemanticDiff>), `timing` (PipelineTiming), `graph_stats` (Option<GraphStats>)
 - No policy reports, no health scores — pure extraction data
 
 ## Extractors
@@ -51,7 +51,7 @@ intently-core is an **extraction-only** library. It analyzes source code and pro
 ## IntentlyEngine
 - Stateful orchestrator that manages the full extraction pipeline
 - Caches: source code, parsed trees (tree-sitter), per-file extractions
-- Methods: `analyze_all()` (full scan), `analyze_changes()` (incremental), `analyze_single_file()` (on-demand)
+- Methods: `full_analysis()` (full scan), `on_file_changed()` (incremental), `analyze_single_file()` (on-demand)
 - Public accessors: `sources()`, `extractions()` for downstream consumers
 
 ## Artifact Flow (Core Scope)
@@ -68,16 +68,16 @@ Source Files
 FileExtraction (per file)
     |
     v
-[TwinBuilder]
+[CodeModelBuilder]
     |
     v
-SystemTwin  -->  SemanticDiff (if previous twin exists)
+CodeModel  -->  SemanticDiff (if previous model exists)
     |
     v
 [KnowledgeGraph Builder]
     |
     v
-ExtractionResult { twin, diff, timing, graph_stats }
+ExtractionResult { model, diff, timing, graph_stats }
 ```
 
 ## What is NOT in Core

@@ -9,8 +9,8 @@ use std::path::Path;
 
 use tree_sitter::Node;
 
-use crate::twin::patterns;
-use crate::twin::types::*;
+use crate::model::patterns;
+use crate::model::types::*;
 
 /// Create a [`SourceAnchor`] from a tree-sitter node and file path.
 ///

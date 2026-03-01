@@ -10,7 +10,7 @@
 
 Intently extracts semantic data (routes, dependencies, sinks, symbols, data models) from source code via tree-sitter CSTs. Currently, extracted artifacts store only `file: PathBuf` + `line: usize`. All other tree-sitter position data (end_line, byte offsets, node kind) is discarded after extraction.
 
-This is lossy. Once data enters the System Twin, there is no precise link back to the CST node that produced it. This blocks:
+This is lossy. Once data enters the CodeModel, there is no precise link back to the CST node that produced it. This blocks:
 
 1. **AST Rewriting** — a policy violation should map to the exact AST node for deterministic code fixes.
 2. **Code context retrieval** — LLMs consuming MCP tools see "POST /checkout at line 42" but cannot see the actual code.

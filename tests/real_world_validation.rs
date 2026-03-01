@@ -109,7 +109,7 @@ fn assert_basic_invariants(result: &ExtractionResult, name: &str) {
 
 /// Assert the repo produces at least `min` routes.
 fn assert_has_routes(result: &ExtractionResult, name: &str, min: usize) {
-    let count = result.twin.stats.total_interfaces;
+    let count = result.model.stats.total_interfaces;
     assert!(
         count >= min,
         "[{name}] expected >= {min} routes, got {count}"
@@ -118,7 +118,7 @@ fn assert_has_routes(result: &ExtractionResult, name: &str, min: usize) {
 
 /// Assert the repo produces at least `min` symbols.
 fn assert_has_symbols(result: &ExtractionResult, name: &str, min: usize) {
-    let count = result.twin.stats.total_symbols;
+    let count = result.model.stats.total_symbols;
     assert!(
         count >= min,
         "[{name}] expected >= {min} symbols, got {count}"
@@ -127,7 +127,7 @@ fn assert_has_symbols(result: &ExtractionResult, name: &str, min: usize) {
 
 /// Assert at least one symbol has a signature (enriched extraction).
 fn assert_has_enriched_symbols(result: &ExtractionResult, name: &str) {
-    let has_sig = result.twin.components[0]
+    let has_sig = result.model.components[0]
         .symbols
         .iter()
         .any(|s| s.signature.is_some());
@@ -139,7 +139,7 @@ fn assert_has_enriched_symbols(result: &ExtractionResult, name: &str) {
 
 /// Assert the repo produces at least `min` sinks.
 fn assert_has_sinks(result: &ExtractionResult, name: &str, min: usize) {
-    let count = result.twin.stats.total_sinks;
+    let count = result.model.stats.total_sinks;
     assert!(
         count >= min,
         "[{name}] expected >= {min} sinks, got {count}"
@@ -148,7 +148,7 @@ fn assert_has_sinks(result: &ExtractionResult, name: &str, min: usize) {
 
 /// Assert the repo produces at least `min` imports.
 fn assert_has_imports(result: &ExtractionResult, name: &str, min: usize) {
-    let count = result.twin.stats.total_imports;
+    let count = result.model.stats.total_imports;
     assert!(
         count >= min,
         "[{name}] expected >= {min} imports, got {count}"
@@ -157,7 +157,7 @@ fn assert_has_imports(result: &ExtractionResult, name: &str, min: usize) {
 
 /// Print a one-line diagnostic report for a project.
 fn print_report(result: &ExtractionResult, name: &str) {
-    let comp = &result.twin.components[0];
+    let comp = &result.model.components[0];
     let authed = comp.interfaces.iter().filter(|r| r.auth.is_some()).count();
     let pii_sinks = comp.sinks.iter().filter(|s| s.contains_pii).count();
     let enriched = comp.symbols.iter().filter(|s| s.signature.is_some()).count();
@@ -166,13 +166,13 @@ fn print_report(result: &ExtractionResult, name: &str) {
         "  {:<28} files={:<5} routes={:<5} auth={:<4} sinks={:<5} pii={:<4} symbols={:<6} enriched={:<5} imports={:<5} time={}ms",
         name,
         result.files_analyzed,
-        result.twin.stats.total_interfaces,
+        result.model.stats.total_interfaces,
         authed,
-        result.twin.stats.total_sinks,
+        result.model.stats.total_sinks,
         pii_sinks,
-        result.twin.stats.total_symbols,
+        result.model.stats.total_symbols,
         enriched,
-        result.twin.stats.total_imports,
+        result.model.stats.total_imports,
         result.timing.total_ms,
     );
 }
@@ -201,7 +201,7 @@ fn typescript_express_realworld() {
     assert_has_imports(&result, name, 5);
 
     // Diagnostic: check auth presence
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -251,10 +251,10 @@ fn python_fastapi_fullstack() {
     assert_has_sinks(&result, name, 1);
 
     // Python extractor does not currently extract imports
-    let imports = result.twin.stats.total_imports;
+    let imports = result.model.stats.total_imports;
     eprintln!("  [{name}] imports: {imports} (Python import extraction not yet implemented)");
 
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -280,10 +280,10 @@ fn python_flask_realworld() {
     assert_has_enriched_symbols(&result, name);
 
     // Flask-realworld may not have detectable log sinks — diagnostic only
-    let sinks = result.twin.stats.total_sinks;
+    let sinks = result.model.stats.total_sinks;
     eprintln!("  [{name}] sinks: {sinks}");
 
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -308,7 +308,7 @@ fn python_django_styleguide() {
     assert_has_enriched_symbols(&result, name);
 
     // Django routes are in urls.py — may or may not match our patterns
-    let routes = result.twin.stats.total_interfaces;
+    let routes = result.model.stats.total_interfaces;
     eprintln!("  [{name}] routes found: {routes}");
 }
 
@@ -334,7 +334,7 @@ fn java_spring_petclinic() {
     assert_has_enriched_symbols(&result, name);
     assert_has_sinks(&result, name, 1);
 
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -359,7 +359,7 @@ fn java_spring_realworld() {
     assert_has_symbols(&result, name, 10);
     assert_has_enriched_symbols(&result, name);
 
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -388,7 +388,7 @@ fn csharp_aspnet_realworld() {
     assert_has_symbols(&result, name, 5);
     assert_has_enriched_symbols(&result, name);
 
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -418,7 +418,7 @@ fn go_gin_examples() {
     assert_has_enriched_symbols(&result, name);
     assert_has_sinks(&result, name, 1);
 
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -443,7 +443,7 @@ fn go_echo_realworld() {
     assert_has_symbols(&result, name, 5);
     assert_has_enriched_symbols(&result, name);
 
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -473,7 +473,7 @@ fn php_laravel_realworld() {
     assert_has_enriched_symbols(&result, name);
     assert_has_sinks(&result, name, 1);
 
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -503,10 +503,10 @@ fn ruby_rails_realworld() {
     assert_has_enriched_symbols(&result, name);
 
     // Rails-realworld may not have detectable log sinks (Rails.logger pattern)
-    let sinks = result.twin.stats.total_sinks;
+    let sinks = result.model.stats.total_sinks;
     eprintln!("  [{name}] sinks: {sinks}");
 
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -531,8 +531,8 @@ fn ruby_administrate() {
     assert_has_enriched_symbols(&result, name);
 
     // Rails engine — check what we find
-    let routes = result.twin.stats.total_interfaces;
-    let sinks = result.twin.stats.total_sinks;
+    let routes = result.model.stats.total_interfaces;
+    let sinks = result.model.stats.total_sinks;
     eprintln!("  [{name}] routes: {routes}, sinks: {sinks}");
 }
 
@@ -555,7 +555,7 @@ fn rust_miniserve() {
     assert_basic_invariants(&result, name);
     // Rust uses generic fallback — no route extraction
     assert_eq!(
-        result.twin.stats.total_interfaces, 0,
+        result.model.stats.total_interfaces, 0,
         "[{name}] Rust should have 0 routes (generic fallback)"
     );
     assert_has_symbols(&result, name, 10);
@@ -563,7 +563,7 @@ fn rust_miniserve() {
 
     // Rust projects use tracing macros (info!(), warn!()) which are macro invocations,
     // not object.method() calls. The generic fallback text-matcher may not detect them.
-    let sinks = result.twin.stats.total_sinks;
+    let sinks = result.model.stats.total_sinks;
     eprintln!("  [{name}] sinks: {sinks} (generic fallback — tracing macros may not match)");
 }
 
@@ -585,7 +585,7 @@ fn kotlin_spring_boot() {
 
     assert_basic_invariants(&result, name);
     // Kotlin Spring should extract routes via java extractor
-    let routes = result.twin.stats.total_interfaces;
+    let routes = result.model.stats.total_interfaces;
     eprintln!("  [{name}] routes found: {routes}");
     assert!(
         routes >= 1,
@@ -593,11 +593,11 @@ fn kotlin_spring_boot() {
     );
 
     // Kotlin has no symbol queries — expect 0
-    let symbols = result.twin.stats.total_symbols;
+    let symbols = result.model.stats.total_symbols;
     eprintln!("  [{name}] symbols: {symbols} (no query for Kotlin)");
 
     // Check auth
-    let authed = result.twin.components[0]
+    let authed = result.model.components[0]
         .interfaces
         .iter()
         .filter(|r| r.auth.is_some())
@@ -605,7 +605,7 @@ fn kotlin_spring_boot() {
     eprintln!("  [{name}] authenticated routes: {authed}");
 
     // Check sinks
-    let sinks = result.twin.stats.total_sinks;
+    let sinks = result.model.stats.total_sinks;
     eprintln!("  [{name}] sinks: {sinks}");
 }
 
@@ -628,16 +628,16 @@ fn swift_log() {
     assert_basic_invariants(&result, name);
     // No routes for Swift (generic fallback)
     assert_eq!(
-        result.twin.stats.total_interfaces, 0,
+        result.model.stats.total_interfaces, 0,
         "[{name}] Swift should have 0 routes"
     );
     // No symbol queries for Swift
-    let symbols = result.twin.stats.total_symbols;
+    let symbols = result.model.stats.total_symbols;
     eprintln!("  [{name}] symbols: {symbols} (no query for Swift)");
 
     // swift-log defines logging abstractions — actual log.info() patterns
     // may or may not be detected by the generic text-matcher.
-    let sinks = result.twin.stats.total_sinks;
+    let sinks = result.model.stats.total_sinks;
     eprintln!("  [{name}] sinks: {sinks} (generic fallback)");
 }
 
@@ -659,16 +659,16 @@ fn c_cjson() {
 
     assert_basic_invariants(&result, name);
     assert_eq!(
-        result.twin.stats.total_interfaces, 0,
+        result.model.stats.total_interfaces, 0,
         "[{name}] C should have 0 routes"
     );
 
     // No symbol queries for C
-    let symbols = result.twin.stats.total_symbols;
+    let symbols = result.model.stats.total_symbols;
     eprintln!("  [{name}] symbols: {symbols} (no query for C)");
 
     // cJSON likely has printf/fprintf calls
-    let sinks = result.twin.stats.total_sinks;
+    let sinks = result.model.stats.total_sinks;
     eprintln!("  [{name}] sinks: {sinks}");
 }
 
@@ -690,15 +690,15 @@ fn cpp_leveldb() {
 
     assert_basic_invariants(&result, name);
     assert_eq!(
-        result.twin.stats.total_interfaces, 0,
+        result.model.stats.total_interfaces, 0,
         "[{name}] C++ should have 0 routes"
     );
 
     // No symbol queries for C++
-    let symbols = result.twin.stats.total_symbols;
+    let symbols = result.model.stats.total_symbols;
     eprintln!("  [{name}] symbols: {symbols} (no query for C++)");
 
-    let sinks = result.twin.stats.total_sinks;
+    let sinks = result.model.stats.total_sinks;
     eprintln!("  [{name}] sinks: {sinks}");
 }
 
@@ -720,15 +720,15 @@ fn scala_play_seed() {
 
     assert_basic_invariants(&result, name);
     assert_eq!(
-        result.twin.stats.total_interfaces, 0,
+        result.model.stats.total_interfaces, 0,
         "[{name}] Scala should have 0 routes"
     );
 
     // No symbol queries for Scala
-    let symbols = result.twin.stats.total_symbols;
+    let symbols = result.model.stats.total_symbols;
     eprintln!("  [{name}] symbols: {symbols} (no query for Scala)");
 
-    let sinks = result.twin.stats.total_sinks;
+    let sinks = result.model.stats.total_sinks;
     eprintln!("  [{name}] sinks: {sinks}");
 }
 
@@ -845,7 +845,7 @@ fn summary_all_languages() {
 
         match result {
             Ok(analysis) => {
-                let comp = &analysis.twin.components[0];
+                let comp = &analysis.model.components[0];
                 let authed = comp.interfaces.iter().filter(|r| r.auth.is_some()).count();
 
                 eprintln!(
@@ -853,10 +853,10 @@ fn summary_all_languages() {
                     spec.name,
                     spec.language,
                     analysis.files_analyzed,
-                    analysis.twin.stats.total_interfaces,
+                    analysis.model.stats.total_interfaces,
                     authed,
-                    analysis.twin.stats.total_sinks,
-                    analysis.twin.stats.total_symbols,
+                    analysis.model.stats.total_sinks,
+                    analysis.model.stats.total_symbols,
                     analysis.timing.total_ms,
                 );
             }

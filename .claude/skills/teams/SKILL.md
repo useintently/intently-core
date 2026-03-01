@@ -22,12 +22,12 @@ Keywords: "who handles", "which team", "route to", "assign to", "responsible for
 
 | Domain | Owner | Agent File | Key Files |
 |--------|-------|------------|-----------|
-| Core Engine, System Twin, Semantic Diff, KnowledgeGraph, Extractors, Architecture, Performance | Kael Okonkwo | kael-okonkwo | `src/`, `Cargo.toml`, `tests/` |
-| Security Review, Dependency Audit, Input Validation, Unsafe Code | Tomás Herrera | tomas-herrera | `src/twin/extractors/`, `Cargo.toml` |
+| Core Engine, CodeModel, Semantic Diff, KnowledgeGraph, Extractors, Architecture, Performance | Kael Okonkwo | kael-okonkwo | `src/`, `Cargo.toml`, `tests/` |
+| Security Review, Dependency Audit, Input Validation, Unsafe Code | Tomás Herrera | tomas-herrera | `src/model/extractors/`, `Cargo.toml` |
 
 ## Routing Logic
 
-1. If the request mentions **Rust, core engine, IR, System Twin, semantic diff, KnowledgeGraph, extractors, performance, benchmarks, or architecture** -> Kael
+1. If the request mentions **Rust, core engine, IR, CodeModel, semantic diff, KnowledgeGraph, extractors, performance, benchmarks, or architecture** -> Kael
 2. If the request mentions **security, secrets, PII, dependency audit, input validation, unsafe code, supply chain** -> Tomás
 3. If cross-cutting -> Kael as primary, Tomás for security review
 

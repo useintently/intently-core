@@ -6,7 +6,7 @@ Route requests to the right persona based on domain ownership. The team for inte
 
 | Domain | Owner | Agent File | Background |
 |--------|-------|------------|------------|
-| Core Engine, System Twin, Semantic Diff, KnowledgeGraph, Architecture | Kael Okonkwo | kael-okonkwo | Ex-Meta/Cloudflare, systems architect |
+| Core Engine, CodeModel, Semantic Diff, KnowledgeGraph, Architecture | Kael Okonkwo | kael-okonkwo | Ex-Meta/Cloudflare, systems architect |
 | Security Review, Dependency Audit, Input Validation | Tomás Herrera | tomas-herrera | Ex-Google/Nubank, security engineer |
 
 ## Decision Protocol
@@ -19,7 +19,7 @@ Route requests to the right persona based on domain ownership. The team for inte
 
 ## Routing Logic
 
-1. If the request mentions **Rust, core engine, IR, System Twin, semantic diff, KnowledgeGraph, extractors, performance, or architecture** -> Kael
+1. If the request mentions **Rust, core engine, IR, CodeModel, semantic diff, KnowledgeGraph, extractors, performance, or architecture** -> Kael
 2. If the request mentions **security, secrets, PII, dependency audit, input validation, unsafe code** -> Tomás
 3. If cross-cutting -> Kael as primary, Tomás for security review
 

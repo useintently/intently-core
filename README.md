@@ -85,7 +85,7 @@ triggers:
 
 **Intent (`intent.yaml`)** — The source of truth. What must be true about your system: services, APIs, flows, invariants, policies. Versioned and auditable. Evolves with the system.
 
-**System Twin** — A machine-readable representation of your system as it is now. Components, dependencies, contracts, flows. The formalized mental model — the memory that AI doesn't have.
+**CodeModel** — A machine-readable representation of your system as it is now. Components, dependencies, contracts, flows. The formalized mental model — the memory that AI doesn't have.
 
 **Semantic Diff** — What changed in behavior and risk, not in lines. "1 API altered, 2 flows affected, PII touched" — not "487 lines added in 12 files".
 
@@ -102,7 +102,7 @@ triggers:
 2. Preview impact                    As Is → To Be with delta
 3. Approve roadmap                   Structured tasks, not vague prompts
 4. LLMs execute                      Claude Code / Codex via VSCode
-5. Intently observes                     System Twin updates, DLIs recalculate
+5. Intently observes                     CodeModel updates, DLIs recalculate
 6. Triggers fire                     Auto-fix, generate tests, notify
 7. You govern                        Merge / adjust / override
 ```
@@ -111,7 +111,7 @@ triggers:
 
 ### Phase 0: Zero Config
 
-Install the VSCode extension. Intently monitors your repo via git, generates the System Twin and semantic diff automatically. No `intent.yaml` required. Immediate value: "what did this change really do to my system?"
+Install the VSCode extension. Intently monitors your repo via git, generates the CodeModel and semantic diff automatically. No `intent.yaml` required. Immediate value: "what did this change really do to my system?"
 
 ### Phase 1: Bootstrap Intent
 
@@ -141,7 +141,7 @@ Refine your intent. Configure DLOs. Create custom triggers. Use Intention Mode f
                        ▼
 ┌─────────────────────────────────────────────┐
 │  Intently Core Engine (Rust)                    │
-│  Intent | System Twin | Policies | Evidence │
+│  Intent | CodeModel | Policies | Evidence │
 │  Planner | Triggers | LLM Orchestrator      │
 └─────────────────────────────────────────────┘
 ```
@@ -158,7 +158,7 @@ Refine your intent. Configure DLOs. Create custom triggers. Use Intention Mode f
 - **Extension:** VSCode Extension API (TypeScript)
 - **Orchestration:** LangGraph with typed state
 - **Sandbox:** Docker containers, OverlayFS (MVP+)
-- **Formats:** YAML (intent, triggers, policies), JSON (System Twin, action plans)
+- **Formats:** YAML (intent, triggers, policies), JSON (CodeModel, action plans)
 
 ## Design Principles
 

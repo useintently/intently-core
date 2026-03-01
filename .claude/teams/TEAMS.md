@@ -8,7 +8,7 @@ Two personas with complementary backgrounds focused on the extraction library. K
 
 | Persona | Role | Background | Domain |
 |---------|------|------------|--------|
-| Kael Okonkwo | Systems Architect | Ex-Meta (Raft/Delos), Ex-Cloudflare (Workers) | Core Engine, System Twin, Semantic Diff, KnowledgeGraph |
+| Kael Okonkwo | Systems Architect | Ex-Meta (Raft/Delos), Ex-Cloudflare (Workers) | Core Engine, CodeModel, Semantic Diff, KnowledgeGraph |
 | Tomás Herrera | Security Reviewer | Ex-Google (Binary Auth), Ex-Nubank (Security) | Security Review, Dependency Audit, Input Validation |
 
 ---
@@ -20,7 +20,7 @@ Two personas with complementary backgrounds focused on the extraction library. K
                     (Systems)     (Security)
                     ─────────     ─────────
 Core Engine         OWNER         reviewer
-System Twin/Diff    OWNER         reviewer
+CodeModel/Diff    OWNER         reviewer
 KnowledgeGraph      OWNER         —
 Extractors          OWNER         reviewer (patterns)
 Parser              OWNER         —
@@ -59,7 +59,7 @@ Security Review     —             OWNER
 ### Core (Kael)
 - Test coverage: >80%
 - Clippy: zero warnings
-- System Twin determinism: 100% (same input = same output)
+- CodeModel determinism: 100% (same input = same output)
 - Benchmark regressions: zero allowed without ADR
 
 ### Security (Tomás)

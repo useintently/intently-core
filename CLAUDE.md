@@ -8,7 +8,7 @@ This document is the primary reference for AI agents and human contributors work
 
 `intently-core` is the **extraction foundation** of the Intently platform. It answers one question: **"What does this codebase contain?"**
 
-It parses source code across 16 languages, extracts semantic information (routes, dependencies, sinks, symbols, data models, call graphs, module boundaries), and builds a structured intermediate representation called the **System Twin**.
+It parses source code across 16 languages, extracts semantic information (routes, dependencies, sinks, symbols, data models, call graphs, module boundaries), and builds a structured intermediate representation called the **CodeModel**.
 
 This crate is a **library**. It does NOT contain:
 - Policy evaluation (→ separate `intently-policy` crate)
@@ -31,11 +31,11 @@ intently-core/
 │   ├── error.rs            # Error types (thiserror)
 │   ├── parser/             # Tree-sitter parsing, language detection, incremental edit
 │   │   └── mod.rs
-│   ├── twin/               # System Twin — the IR
+│   ├── model/              # CodeModel — the IR
 │   │   ├── mod.rs
-│   │   ├── types.rs        # SystemTwin, FileExtraction, Component, Interface, etc.
-│   │   ├── builder.rs      # Incremental twin builder (O(1) per-file updates)
-│   │   ├── diff.rs         # Semantic diff between twin states
+│   │   ├── types.rs        # CodeModel, FileExtraction, Component, Interface, etc.
+│   │   ├── builder.rs      # Incremental model builder (O(1) per-file updates)
+│   │   ├── diff.rs         # Semantic diff between CodeModel states
 │   │   ├── graph.rs        # KnowledgeGraph (petgraph) — impact analysis, cycles
 │   │   ├── import_resolver.rs  # Cross-file import resolution
 │   │   ├── module_inference.rs # Module boundary detection
@@ -120,9 +120,9 @@ let graph: Option<&KnowledgeGraph> = engine.graph();
 
 ```rust
 pub struct ExtractionResult {
-    pub twin: SystemTwin,              // The IR
-    pub diff: Option<SemanticDiff>,    // Behavioral delta from previous twin
-    pub timing: PipelineTiming,        // parse_extract_ms, twin_build_ms, total_ms
+    pub model: CodeModel,              // The IR
+    pub diff: Option<SemanticDiff>,    // Behavioral delta from previous model
+    pub timing: PipelineTiming,        // parse_extract_ms, model_build_ms, total_ms
     pub graph_stats: Option<GraphStats>, // Node/edge counts
     pub duration_ms: u64,
     pub files_analyzed: usize,
@@ -147,7 +147,7 @@ pub struct ExtractionResult {
 <type>(<scope>): <description>
 
 Types: feat, fix, refactor, docs, test, chore
-Scopes: parser, twin, extractors, graph, diff, search, engine
+Scopes: parser, model, extractors, graph, diff, search, engine
 ```
 
 ---
@@ -156,9 +156,9 @@ Scopes: parser, twin, extractors, graph, diff, search, engine
 
 1. Add tree-sitter grammar dependency in `Cargo.toml`
 2. Add language variant in `parser/mod.rs` (`SupportedLanguage` enum + `detect_language`)
-3. Create extractor in `src/twin/extractors/<language>.rs` (or reuse existing)
-4. Add symbol extraction query in `src/twin/extractors/symbols.rs`
-5. Add call graph patterns in `src/twin/extractors/call_graph.rs`
+3. Create extractor in `src/model/extractors/<language>.rs` (or reuse existing)
+4. Add symbol extraction query in `src/model/extractors/symbols.rs`
+5. Add call graph patterns in `src/model/extractors/call_graph.rs`
 6. Create fixture project in `tests/fixtures/<framework>_<type>/`
 7. Add integration test in `tests/full_extraction.rs`
 8. Update this document

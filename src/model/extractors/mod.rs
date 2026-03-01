@@ -99,7 +99,7 @@ mod tests {
 
     use super::*;
     use crate::parser;
-    use crate::twin::types::*;
+    use crate::model::types::*;
 
     /// Helper: parse and extract a source file.
     fn parse_and_extract(source: &str, lang: SupportedLanguage, filename: &str) -> FileExtraction {

@@ -1,6 +1,6 @@
-# System Twin Review
+# CodeModel Review
 
-Review System Twin (IR) implementation in Intently.
+Review CodeModel (IR) implementation in Intently.
 
 ## Trigger
 
@@ -9,7 +9,7 @@ Activate when PRs or changes touch:
 - IR data structures, serialization, or deserialization
 - `system_twin.json` schema definitions
 
-Keywords: "system twin review", "IR review", "review IR", "review system twin"
+Keywords: "code model review", "IR review", "review IR", "review code model"
 
 ## What This Skill Does
 
@@ -52,7 +52,7 @@ Keywords: "system twin review", "IR review", "review IR", "review system twin"
 ## Output Format
 
 ```
-## System Twin Review: <file_path>
+## CodeModel Review: <file_path>
 
 ### IR Completeness
 - [PASS/FAIL] <detail>

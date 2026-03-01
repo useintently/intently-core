@@ -3,7 +3,7 @@
 //! Each test points the IntentlyEngine at a fixture directory containing
 //! realistic source code for one language/framework combination.  The engine
 //! discovers files, parses with tree-sitter, dispatches to the correct
-//! extractor, and builds a SystemTwin.  We then assert on the aggregate
+//! extractor, and builds a CodeModel.  We then assert on the aggregate
 //! extraction results — route counts, auth presence, HTTP call detection,
 //! log sinks, and PII flags.
 //!
@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use intently_core::twin::types::*;
+use intently_core::model::types::*;
 use intently_core::IntentlyEngine;
 
 /// Run full analysis on a fixture project and return the result.
@@ -37,7 +37,7 @@ fn analyze_fixture(project_name: &str) -> intently_core::ExtractionResult {
 #[test]
 fn express_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     let result = analyze_fixture("express_ecommerce");
-    let twin = &result.twin;
+    let model = &result.model;
 
     // Should discover and analyze multiple .ts files
     assert!(
@@ -47,7 +47,7 @@ fn express_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     );
 
     // Should extract many routes (users CRUD + payments + products + health/metrics)
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 15,
         "Express project should have ≥15 routes, got {}",
@@ -69,7 +69,7 @@ fn express_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     );
 
     // Should detect external HTTP calls (axios, fetch)
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 3,
         "Expected ≥3 HTTP calls (Stripe, email, analytics), got {}",
@@ -77,7 +77,7 @@ fn express_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     );
 
     // Should detect log sinks
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 5,
         "Expected ≥5 log sinks, got {}",
@@ -108,17 +108,17 @@ fn tsx_dashboard_extracts_http_calls_and_sinks() {
         "Expected at least 1 TSX file analyzed"
     );
 
-    let twin = &result.twin;
+    let model = &result.model;
 
     // TSX components typically have HTTP calls (axios/fetch) and log sinks
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 1,
         "TSX component should have HTTP calls, got {}",
         http_calls.len()
     );
 
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 1,
         "TSX component should have log sinks, got {}",
@@ -135,8 +135,8 @@ fn jsx_app_extracts_http_calls_and_sinks() {
         "Expected at least 1 JSX file analyzed"
     );
 
-    let twin = &result.twin;
-    let sinks = &twin.components[0].sinks;
+    let model = &result.model;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 1,
         "JSX app should have log sinks, got {}",
@@ -151,7 +151,7 @@ fn jsx_app_extracts_http_calls_and_sinks() {
 #[test]
 fn fastapi_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     let result = analyze_fixture("fastapi_ecommerce");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 3,
@@ -159,7 +159,7 @@ fn fastapi_ecommerce_extracts_routes_auth_httpcalls_sinks() {
         result.files_analyzed
     );
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 10,
         "FastAPI project should have ≥10 routes, got {}",
@@ -175,7 +175,7 @@ fn fastapi_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     );
 
     // HTTP calls to external services (requests, httpx)
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 2,
         "Expected ≥2 HTTP calls in FastAPI project, got {}",
@@ -183,7 +183,7 @@ fn fastapi_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     );
 
     // Log sinks with PII
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 3,
         "Expected ≥3 log sinks, got {}",
@@ -201,14 +201,14 @@ fn fastapi_ecommerce_extracts_routes_auth_httpcalls_sinks() {
 #[test]
 fn flask_ecommerce_extracts_routes_and_auth() {
     let result = analyze_fixture("flask_ecommerce");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 1,
         "Expected at least 1 Flask file analyzed"
     );
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 5,
         "Flask project should have ≥5 routes, got {}",
@@ -227,7 +227,7 @@ fn flask_ecommerce_extracts_routes_and_auth() {
 #[test]
 fn django_ecommerce_extracts_url_patterns_and_sinks() {
     let result = analyze_fixture("django_ecommerce");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 2,
@@ -235,7 +235,7 @@ fn django_ecommerce_extracts_url_patterns_and_sinks() {
         result.files_analyzed
     );
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 8,
         "Django project should have ≥8 URL patterns, got {}",
@@ -249,7 +249,7 @@ fn django_ecommerce_extracts_url_patterns_and_sinks() {
     // For now, we verify that routes and sinks are correctly extracted.
 
     // Log sinks
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 2,
         "Expected ≥2 log sinks in Django project, got {}",
@@ -257,7 +257,7 @@ fn django_ecommerce_extracts_url_patterns_and_sinks() {
     );
 
     // HTTP calls (requests, httpx in services.py)
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 2,
         "Expected ≥2 HTTP calls in Django project, got {}",
@@ -280,7 +280,7 @@ fn django_ecommerce_extracts_url_patterns_and_sinks() {
 #[test]
 fn spring_ecommerce_extracts_annotations_auth_httpcalls_sinks() {
     let result = analyze_fixture("spring_ecommerce");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 4,
@@ -288,7 +288,7 @@ fn spring_ecommerce_extracts_annotations_auth_httpcalls_sinks() {
         result.files_analyzed
     );
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 15,
         "Spring project should have ≥15 annotated routes, got {}",
@@ -315,7 +315,7 @@ fn spring_ecommerce_extracts_annotations_auth_httpcalls_sinks() {
     );
 
     // HTTP calls (RestTemplate, WebClient)
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 3,
         "Expected ≥3 HTTP calls in Spring project, got {}",
@@ -323,7 +323,7 @@ fn spring_ecommerce_extracts_annotations_auth_httpcalls_sinks() {
     );
 
     // Log sinks with PII
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 5,
         "Expected ≥5 log sinks, got {}",
@@ -342,7 +342,7 @@ fn spring_ecommerce_extracts_annotations_auth_httpcalls_sinks() {
 #[test]
 fn kotlin_spring_extracts_annotations_and_auth() {
     let result = analyze_fixture("kotlin_spring");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 2,
@@ -350,7 +350,7 @@ fn kotlin_spring_extracts_annotations_and_auth() {
         result.files_analyzed
     );
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 5,
         "Kotlin Spring project should have ≥5 routes, got {}",
@@ -365,7 +365,7 @@ fn kotlin_spring_extracts_annotations_and_auth() {
     );
 
     // HTTP calls
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 1,
         "Expected ≥1 HTTP call in Kotlin project, got {}",
@@ -380,7 +380,7 @@ fn kotlin_spring_extracts_annotations_and_auth() {
 #[test]
 fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
     let result = analyze_fixture("aspnet_ecommerce");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 4,
@@ -388,7 +388,7 @@ fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
         result.files_analyzed
     );
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 15,
         "ASP.NET project should have ≥15 routes, got {}",
@@ -415,7 +415,7 @@ fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
     );
 
     // HTTP calls (HttpClient)
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 3,
         "Expected ≥3 HttpClient calls, got {}",
@@ -423,7 +423,7 @@ fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
     );
 
     // Log sinks with PII
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 5,
         "Expected ≥5 log sinks, got {}",
@@ -438,7 +438,7 @@ fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
 #[test]
 fn gin_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     let result = analyze_fixture("gin_ecommerce");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 4,
@@ -446,7 +446,7 @@ fn gin_ecommerce_extracts_routes_auth_httpcalls_sinks() {
         result.files_analyzed
     );
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 12,
         "Gin project should have ≥12 routes, got {}",
@@ -462,7 +462,7 @@ fn gin_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     );
 
     // HTTP calls (http.Get, http.Post, client.Do)
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 3,
         "Expected ≥3 HTTP calls in Gin project, got {}",
@@ -470,7 +470,7 @@ fn gin_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     );
 
     // Log sinks
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 3,
         "Expected ≥3 log sinks, got {}",
@@ -483,11 +483,11 @@ fn gin_ecommerce_extracts_routes_auth_httpcalls_sinks() {
 #[test]
 fn echo_api_extracts_routes_and_sinks() {
     let result = analyze_fixture("echo_api");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(result.files_analyzed >= 1, "Expected ≥1 Go file analyzed");
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 5,
         "Echo project should have ≥5 routes, got {}",
@@ -498,11 +498,11 @@ fn echo_api_extracts_routes_and_sinks() {
 #[test]
 fn nethttp_api_extracts_handlefunc_routes() {
     let result = analyze_fixture("nethttp_api");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(result.files_analyzed >= 1, "Expected ≥1 Go file analyzed");
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 4,
         "net/http project should have ≥4 HandleFunc routes, got {}",
@@ -525,7 +525,7 @@ fn nethttp_api_extracts_handlefunc_routes() {
 #[test]
 fn laravel_ecommerce_extracts_routes_middleware_httpcalls_sinks() {
     let result = analyze_fixture("laravel_ecommerce");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 3,
@@ -533,7 +533,7 @@ fn laravel_ecommerce_extracts_routes_middleware_httpcalls_sinks() {
         result.files_analyzed
     );
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 15,
         "Laravel project should have ≥15 Route:: definitions, got {}",
@@ -549,7 +549,7 @@ fn laravel_ecommerce_extracts_routes_middleware_httpcalls_sinks() {
     );
 
     // HTTP calls (Http::get, Http::post)
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 2,
         "Expected ≥2 Http facade calls, got {}",
@@ -557,7 +557,7 @@ fn laravel_ecommerce_extracts_routes_middleware_httpcalls_sinks() {
     );
 
     // Log sinks (Log::info uses :: pattern)
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 3,
         "Expected ≥3 Log:: sinks, got {}",
@@ -574,7 +574,7 @@ fn laravel_ecommerce_extracts_routes_middleware_httpcalls_sinks() {
 #[test]
 fn rails_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     let result = analyze_fixture("rails_ecommerce");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 4,
@@ -582,7 +582,7 @@ fn rails_ecommerce_extracts_routes_auth_httpcalls_sinks() {
         result.files_analyzed
     );
 
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.len() >= 10,
         "Rails project should have ≥10 routes (DSL + resources), got {}",
@@ -598,7 +598,7 @@ fn rails_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     );
 
     // HTTP calls (HTTParty, Faraday, RestClient)
-    let http_calls = &twin.components[0].dependencies;
+    let http_calls = &model.components[0].dependencies;
     assert!(
         http_calls.len() >= 2,
         "Expected ≥2 HTTP client calls, got {}",
@@ -606,7 +606,7 @@ fn rails_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     );
 
     // Log sinks
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 3,
         "Expected ≥3 log sinks, got {}",
@@ -631,7 +631,7 @@ fn rails_ecommerce_extracts_routes_auth_httpcalls_sinks() {
 #[test]
 fn rust_service_extracts_log_sinks_with_pii() {
     let result = analyze_fixture("rust_service");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 1,
@@ -639,13 +639,13 @@ fn rust_service_extracts_log_sinks_with_pii() {
     );
 
     // Generic extractor: no routes, no HTTP calls — only sinks
-    let routes = &twin.components[0].interfaces;
+    let routes = &model.components[0].interfaces;
     assert!(
         routes.is_empty(),
         "Rust project should have no route extraction (generic fallback)"
     );
 
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 5,
         "Rust project should have ≥5 log sinks, got {}",
@@ -662,14 +662,14 @@ fn rust_service_extracts_log_sinks_with_pii() {
 #[test]
 fn cpp_service_extracts_log_sinks_with_pii() {
     let result = analyze_fixture("cpp_service");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 1,
         "Expected at least 1 C++ file analyzed"
     );
 
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 5,
         "C++ project should have ≥5 log sinks, got {}",
@@ -682,14 +682,14 @@ fn cpp_service_extracts_log_sinks_with_pii() {
 #[test]
 fn c_service_extracts_log_sinks() {
     let result = analyze_fixture("c_service");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 1,
         "Expected at least 1 C file analyzed"
     );
 
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 3,
         "C project should have ≥3 log sinks, got {}",
@@ -700,14 +700,14 @@ fn c_service_extracts_log_sinks() {
 #[test]
 fn swift_service_extracts_log_sinks_with_pii() {
     let result = analyze_fixture("swift_service");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 1,
         "Expected at least 1 Swift file analyzed"
     );
 
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 3,
         "Swift project should have ≥3 log sinks, got {}",
@@ -720,14 +720,14 @@ fn swift_service_extracts_log_sinks_with_pii() {
 #[test]
 fn scala_service_extracts_log_sinks_with_pii() {
     let result = analyze_fixture("scala_service");
-    let twin = &result.twin;
+    let model = &result.model;
 
     assert!(
         result.files_analyzed >= 1,
         "Expected at least 1 Scala file analyzed"
     );
 
-    let sinks = &twin.components[0].sinks;
+    let sinks = &model.components[0].sinks;
     assert!(
         sinks.len() >= 3,
         "Scala project should have ≥3 log sinks, got {}",
