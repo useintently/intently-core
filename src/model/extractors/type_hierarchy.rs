@@ -145,6 +145,7 @@ fn extract_ts_heritage(
                                     reference_kind: ReferenceKind::Extends,
                                     confidence: 0.0,
                                     resolution_method: ResolutionMethod::Unresolved,
+                                    is_test_reference: false,
                                 });
                             }
                         }
@@ -178,6 +179,7 @@ fn extract_ts_heritage(
                                     reference_kind: ReferenceKind::Implements,
                                     confidence: 0.0,
                                     resolution_method: ResolutionMethod::Unresolved,
+                                    is_test_reference: false,
                                 });
                             }
                         }
@@ -233,6 +235,7 @@ fn extract_python_class_hierarchy(
                         reference_kind: ReferenceKind::Extends,
                         confidence: 0.0,
                         resolution_method: ResolutionMethod::Unresolved,
+                        is_test_reference: false,
                     });
                 }
             }
@@ -393,6 +396,7 @@ fn extract_csharp_class_hierarchy(
                                 reference_kind: kind,
                                 confidence: 0.0,
                                 resolution_method: ResolutionMethod::Unresolved,
+                                is_test_reference: false,
                             });
                         }
                     }
@@ -470,6 +474,7 @@ fn extract_go_embedding(
                         reference_kind: ReferenceKind::Extends,
                         confidence: 0.0,
                         resolution_method: ResolutionMethod::Unresolved,
+                        is_test_reference: false,
                     });
                 }
             }
@@ -520,6 +525,7 @@ fn extract_rust_impl_for(
         reference_kind: ReferenceKind::Implements,
         confidence: 0.0,
         resolution_method: ResolutionMethod::Unresolved,
+        is_test_reference: false,
     });
 }
 
@@ -552,6 +558,7 @@ fn extract_type_identifiers_from(
                         reference_kind: kind,
                         confidence: 0.0,
                         resolution_method: ResolutionMethod::Unresolved,
+                        is_test_reference: false,
                     });
                 }
                 // Recurse into intermediate nodes (type_list, generic_type, etc.)

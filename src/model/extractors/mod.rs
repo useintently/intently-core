@@ -29,7 +29,7 @@ use tree_sitter::Tree;
 
 use crate::parser::{LanguageFamily, SupportedLanguage};
 
-use super::types::FileExtraction;
+use super::types::{estimate_tokens, FileExtraction, FileRole};
 
 /// Extract semantic information from a parsed source file.
 ///
@@ -42,6 +42,10 @@ use super::types::FileExtraction;
 /// - `Php`                                → Laravel Route:: route + middleware auth + HTTP call + log
 /// - `Ruby`                               → Rails route DSL + before_action auth + HTTP call + log
 /// - All others (Rust, Swift, C, C++)     → generic log sink detection with PII scanning
+///
+/// After language-specific extraction, enriches the result with:
+/// - File role classification via `FileRole::from_path()`
+/// - Token estimation via `estimate_tokens()`
 pub fn extract(
     file_path: &Path,
     source: &str,
@@ -75,6 +79,10 @@ pub fn extract(
 
     // Extract data models (classes, structs, interfaces with fields)
     extraction.data_models = data_models::extract_data_models(source, tree, language, file_path);
+
+    // Enrich with file role and token estimation
+    extraction.file_role = FileRole::from_path(file_path);
+    extraction.estimated_tokens = estimate_tokens(source.len() as u64);
 
     extraction
 }

@@ -70,6 +70,7 @@ fn walk_for_calls(
                 reference_kind: ReferenceKind::Call,
                 confidence: 0.0,
                 resolution_method: ResolutionMethod::Unresolved,
+                is_test_reference: false,
             });
         }
     }

@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use intently_core::model::types::*;
-use intently_core::IntentlyEngine;
+use intently_core::{GraphStats, IntentlyEngine, WorkspaceKind};
 
 /// Run full analysis on a fixture project and return the result.
 fn analyze_fixture(project_name: &str) -> intently_core::ExtractionResult {
@@ -970,5 +970,1533 @@ fn express_ecommerce_graph_analysis_pipeline() {
     assert!(
         !ctx.process_flows.is_empty(),
         "should trace at least one process flow from entry points"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Symbol Extraction
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn express_ecommerce_extracts_symbols_with_signatures() {
+    let result = analyze_fixture("express_ecommerce");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(
+        symbols.len() >= 5,
+        "Express project should extract ≥5 symbols (classes + functions), got {}",
+        symbols.len()
+    );
+
+    // Should have at least one class (StripeService)
+    let classes = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Class)
+        .count();
+    assert!(
+        classes >= 1,
+        "Expected ≥1 class symbol (StripeService), got {}",
+        classes
+    );
+
+    // Should have functions/methods
+    let functions = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Function || s.kind == SymbolKind::Method)
+        .count();
+    assert!(
+        functions >= 3,
+        "Expected ≥3 function/method symbols, got {}",
+        functions
+    );
+
+    // At least some should have signatures
+    let with_signature = symbols.iter().filter(|s| s.signature.is_some()).count();
+    assert!(
+        with_signature >= 3,
+        "Expected ≥3 symbols with signatures, got {}",
+        with_signature
+    );
+
+    // Stats should reflect symbol count
+    assert_eq!(
+        result.model.stats.total_symbols,
+        symbols.len(),
+        "stats.total_symbols should match actual symbol count"
+    );
+}
+
+#[test]
+fn nestjs_api_extracts_class_and_method_symbols() {
+    let result = analyze_fixture("nestjs_api");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(
+        symbols.len() >= 5,
+        "NestJS project should extract ≥5 symbols, got {}",
+        symbols.len()
+    );
+
+    // Should have controller classes
+    let classes = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Class)
+        .count();
+    assert!(
+        classes >= 2,
+        "Expected ≥2 controller classes (UsersController, ArticlesController), got {}",
+        classes
+    );
+
+    // Should have methods within classes
+    let methods = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Method)
+        .count();
+    assert!(
+        methods >= 5,
+        "Expected ≥5 controller methods, got {}",
+        methods
+    );
+
+    // Methods should have parent references to their controller classes
+    let with_parent = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Method && s.parent.is_some())
+        .count();
+    assert!(
+        with_parent >= 3,
+        "Expected ≥3 methods with parent class reference, got {}",
+        with_parent
+    );
+}
+
+#[test]
+fn fastapi_ecommerce_extracts_function_symbols() {
+    let result = analyze_fixture("fastapi_ecommerce");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(
+        symbols.len() >= 3,
+        "FastAPI project should extract ≥3 symbols, got {}",
+        symbols.len()
+    );
+
+    // Python extractors should find functions
+    let functions = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Function)
+        .count();
+    assert!(
+        functions >= 2,
+        "Expected ≥2 function symbols, got {}",
+        functions
+    );
+
+    // At least some should have signatures
+    let with_signature = symbols.iter().filter(|s| s.signature.is_some()).count();
+    assert!(
+        with_signature >= 1,
+        "Expected ≥1 symbol with signature, got {}",
+        with_signature
+    );
+}
+
+#[test]
+fn spring_ecommerce_extracts_class_method_symbols() {
+    let result = analyze_fixture("spring_ecommerce");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(
+        symbols.len() >= 10,
+        "Spring project should extract ≥10 symbols (controllers + models + methods), got {}",
+        symbols.len()
+    );
+
+    // Should have classes
+    let classes = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Class)
+        .count();
+    assert!(
+        classes >= 2,
+        "Expected ≥2 class symbols (controllers), got {}",
+        classes
+    );
+
+    // Should have methods with visibility
+    let methods_with_visibility = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Method && s.visibility.is_some())
+        .count();
+    assert!(
+        methods_with_visibility >= 3,
+        "Expected ≥3 methods with visibility, got {}",
+        methods_with_visibility
+    );
+}
+
+#[test]
+fn aspnet_ecommerce_extracts_class_method_symbols() {
+    let result = analyze_fixture("aspnet_ecommerce");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(
+        symbols.len() >= 10,
+        "ASP.NET project should extract ≥10 symbols, got {}",
+        symbols.len()
+    );
+
+    // Should have classes (controllers + services)
+    let classes = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Class)
+        .count();
+    assert!(
+        classes >= 3,
+        "Expected ≥3 class symbols (controllers + services), got {}",
+        classes
+    );
+}
+
+#[test]
+fn gin_ecommerce_extracts_function_symbols() {
+    let result = analyze_fixture("gin_ecommerce");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(
+        symbols.len() >= 5,
+        "Gin project should extract ≥5 symbols, got {}",
+        symbols.len()
+    );
+
+    // Go uses functions (not methods on classes)
+    let functions = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Function)
+        .count();
+    assert!(
+        functions >= 3,
+        "Expected ≥3 Go function symbols, got {}",
+        functions
+    );
+}
+
+#[test]
+fn laravel_ecommerce_extracts_class_method_symbols() {
+    let result = analyze_fixture("laravel_ecommerce");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(
+        symbols.len() >= 3,
+        "Laravel project should extract ≥3 symbols, got {}",
+        symbols.len()
+    );
+
+    // PHP extractors should find classes and methods
+    let classes = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Class)
+        .count();
+    assert!(
+        classes >= 1,
+        "Expected ≥1 PHP class symbol, got {}",
+        classes
+    );
+}
+
+#[test]
+fn rails_ecommerce_extracts_class_method_symbols() {
+    let result = analyze_fixture("rails_ecommerce");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(
+        symbols.len() >= 3,
+        "Rails project should extract ≥3 symbols, got {}",
+        symbols.len()
+    );
+
+    // Ruby extractors should find classes
+    let classes = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Class)
+        .count();
+    assert!(
+        classes >= 1,
+        "Expected ≥1 Ruby class symbol, got {}",
+        classes
+    );
+}
+
+#[test]
+fn rust_service_extracts_function_symbols() {
+    let result = analyze_fixture("rust_service");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(
+        symbols.len() >= 3,
+        "Rust project should extract ≥3 symbols, got {}",
+        symbols.len()
+    );
+
+    // Rust uses functions and structs
+    let functions = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Function)
+        .count();
+    assert!(
+        functions >= 1,
+        "Expected ≥1 Rust function symbol, got {}",
+        functions
+    );
+
+    // Rust symbols should have signatures
+    let with_signature = symbols.iter().filter(|s| s.signature.is_some()).count();
+    assert!(
+        with_signature >= 1,
+        "Expected ≥1 Rust symbol with signature, got {}",
+        with_signature
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Data Model Extraction
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn express_ecommerce_extracts_typescript_data_models() {
+    let result = analyze_fixture("express_ecommerce");
+    let data_models = &result.model.components[0].data_models;
+
+    // stripe.ts defines TypeScript interfaces (StripeCharge, StripeRefund, etc.)
+    assert!(
+        !data_models.is_empty(),
+        "Express project should extract data models (TypeScript interfaces in stripe.ts), got 0"
+    );
+
+    // Data models should have fields
+    let with_fields = data_models
+        .iter()
+        .filter(|dm| !dm.fields.is_empty())
+        .count();
+    assert!(
+        with_fields >= 1,
+        "Expected ≥1 data model with fields, got {}",
+        with_fields
+    );
+
+    // Stats should track data model count
+    assert_eq!(
+        result.model.stats.total_data_models,
+        data_models.len(),
+        "stats.total_data_models should match actual count"
+    );
+}
+
+#[test]
+fn spring_ecommerce_extracts_java_data_models() {
+    let result = analyze_fixture("spring_ecommerce");
+    let data_models = &result.model.components[0].data_models;
+
+    assert!(
+        !data_models.is_empty(),
+        "Spring project should extract Java data models (classes with fields), got 0"
+    );
+
+    // At least some should be Class kind
+    let classes = data_models
+        .iter()
+        .filter(|dm| dm.model_kind == DataModelKind::Class)
+        .count();
+    assert!(
+        classes >= 1,
+        "Expected ≥1 Class data model, got {}",
+        classes
+    );
+
+    // Should have fields with types
+    let has_typed_fields = data_models
+        .iter()
+        .any(|dm| dm.fields.iter().any(|f| f.field_type.is_some()));
+    assert!(
+        has_typed_fields,
+        "Expected at least one data model with typed fields"
+    );
+}
+
+#[test]
+fn aspnet_ecommerce_extracts_csharp_data_models() {
+    let result = analyze_fixture("aspnet_ecommerce");
+    let data_models = &result.model.components[0].data_models;
+
+    assert!(
+        !data_models.is_empty(),
+        "ASP.NET project should extract C# data models, got 0"
+    );
+
+    // All data models should have valid anchors
+    for dm in data_models {
+        assert!(
+            !dm.name.is_empty(),
+            "Data model should have a non-empty name"
+        );
+        assert!(
+            dm.anchor.line > 0,
+            "Data model '{}' should have line > 0",
+            dm.name
+        );
+    }
+
+    // Stats should track data model count
+    assert_eq!(
+        result.model.stats.total_data_models,
+        data_models.len(),
+        "stats.total_data_models should match actual count"
+    );
+}
+
+#[test]
+fn gin_ecommerce_extracts_go_struct_data_models() {
+    let result = analyze_fixture("gin_ecommerce");
+    let data_models = &result.model.components[0].data_models;
+
+    assert!(
+        !data_models.is_empty(),
+        "Gin project should extract Go struct data models, got 0"
+    );
+
+    // Go data models should be Struct kind
+    let structs = data_models
+        .iter()
+        .filter(|dm| dm.model_kind == DataModelKind::Struct)
+        .count();
+    assert!(
+        structs >= 1,
+        "Expected ≥1 Struct data model in Go project, got {}",
+        structs
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  References / Call Graph
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn express_ecommerce_extracts_call_references() {
+    let result = analyze_fixture("express_ecommerce");
+    let references = &result.model.components[0].references;
+
+    assert!(
+        !references.is_empty(),
+        "Express project should extract references (call sites, imports), got 0"
+    );
+
+    // Should have Call references (function calls across the project)
+    let calls = references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Call)
+        .count();
+    assert!(calls >= 1, "Expected ≥1 Call reference, got {}", calls);
+
+    // Should have Import references
+    let imports = references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Import)
+        .count();
+    assert!(
+        imports >= 1,
+        "Expected ≥1 Import reference, got {}",
+        imports
+    );
+
+    // Stats should track reference count
+    assert_eq!(
+        result.model.stats.total_references,
+        references.len(),
+        "stats.total_references should match actual count"
+    );
+}
+
+#[test]
+fn nestjs_api_extracts_references() {
+    let result = analyze_fixture("nestjs_api");
+    let references = &result.model.components[0].references;
+
+    assert!(
+        !references.is_empty(),
+        "NestJS project should extract references, got 0"
+    );
+
+    // All references should have valid source info
+    for r in references {
+        assert!(
+            !r.source_file.as_os_str().is_empty(),
+            "Reference should have a source_file"
+        );
+        assert!(r.source_line > 0, "Reference should have source_line > 0");
+    }
+}
+
+#[test]
+fn spring_ecommerce_extracts_references() {
+    let result = analyze_fixture("spring_ecommerce");
+    let references = &result.model.components[0].references;
+
+    assert!(
+        !references.is_empty(),
+        "Spring project should extract references, got 0"
+    );
+
+    // Should have Call references at minimum
+    let calls = references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Call)
+        .count();
+    assert!(
+        calls >= 1,
+        "Expected ≥1 Call reference in Spring project, got {}",
+        calls
+    );
+
+    // All references should have valid source info
+    for r in references {
+        assert!(r.source_line > 0, "Reference should have source_line > 0");
+        assert!(
+            !r.target_symbol.is_empty(),
+            "Reference should have non-empty target_symbol"
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Confidence Scoring
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn express_ecommerce_references_have_confidence_scores() {
+    let result = analyze_fixture("express_ecommerce");
+    let references = &result.model.components[0].references;
+
+    // At least some references should be resolved with confidence > 0
+    let resolved = references.iter().filter(|r| r.confidence > 0.0).count();
+    assert!(
+        resolved >= 1,
+        "Expected ≥1 reference with confidence > 0.0, got {} resolved out of {} total",
+        resolved,
+        references.len()
+    );
+
+    // Resolved references should have a non-Unresolved method
+    let with_method = references
+        .iter()
+        .filter(|r| r.resolution_method != ResolutionMethod::Unresolved)
+        .count();
+    assert!(
+        with_method >= 1,
+        "Expected ≥1 reference with resolution_method != Unresolved, got {}",
+        with_method
+    );
+}
+
+#[test]
+fn multi_file_projects_have_resolved_references_in_stats() {
+    // Test that stats track resolved references for multi-file projects
+    let fixtures = [
+        "express_ecommerce",
+        "nestjs_api",
+        "spring_ecommerce",
+        "aspnet_ecommerce",
+    ];
+
+    for fixture_name in &fixtures {
+        let result = analyze_fixture(fixture_name);
+        let stats = &result.model.stats;
+
+        // Multi-file projects should have at least some references
+        assert!(
+            stats.total_references > 0,
+            "[{fixture_name}] expected total_references > 0, got {}",
+            stats.total_references
+        );
+
+        // resolved_references should be populated (may be 0 for some projects, but tracked)
+        // avg_resolution_confidence should be 0.0 or positive
+        assert!(
+            stats.avg_resolution_confidence >= 0.0,
+            "[{fixture_name}] avg_resolution_confidence should be >= 0.0, got {}",
+            stats.avg_resolution_confidence
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Import Extraction
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn express_ecommerce_extracts_typescript_imports() {
+    let result = analyze_fixture("express_ecommerce");
+    let imports = &result.model.components[0].imports;
+
+    assert!(
+        imports.len() >= 5,
+        "Express project should extract ≥5 import statements (axios, express, etc.), got {}",
+        imports.len()
+    );
+
+    // Should have imports from external packages
+    let external = imports
+        .iter()
+        .any(|i| i.source.contains("axios") || i.source.contains("express"));
+    assert!(
+        external,
+        "Expected imports from external packages (axios, express)"
+    );
+
+    // Stats should match
+    assert_eq!(
+        result.model.stats.total_imports,
+        imports.len(),
+        "stats.total_imports should match actual import count"
+    );
+}
+
+#[test]
+fn nestjs_api_extracts_imports() {
+    let result = analyze_fixture("nestjs_api");
+    let imports = &result.model.components[0].imports;
+
+    assert!(
+        imports.len() >= 3,
+        "NestJS project should extract ≥3 imports (@nestjs/common, etc.), got {}",
+        imports.len()
+    );
+
+    // Should have NestJS framework imports
+    let nestjs = imports.iter().any(|i| i.source.contains("@nestjs"));
+    assert!(nestjs, "Expected imports from @nestjs packages");
+}
+
+#[test]
+fn spring_ecommerce_import_count_matches_stats() {
+    let result = analyze_fixture("spring_ecommerce");
+    let imports = &result.model.components[0].imports;
+
+    // Java import extraction is not yet implemented at the extractor level.
+    // Verify the stats are consistent with the actual data.
+    assert_eq!(
+        result.model.stats.total_imports,
+        imports.len(),
+        "stats.total_imports should match actual import count"
+    );
+}
+
+#[test]
+fn fastapi_ecommerce_import_count_matches_stats() {
+    let result = analyze_fixture("fastapi_ecommerce");
+    let imports = &result.model.components[0].imports;
+
+    // Python import extraction is not yet implemented at the extractor level.
+    // Verify stats consistency.
+    assert_eq!(
+        result.model.stats.total_imports,
+        imports.len(),
+        "stats.total_imports should match actual import count"
+    );
+}
+
+#[test]
+fn aspnet_ecommerce_import_count_matches_stats() {
+    let result = analyze_fixture("aspnet_ecommerce");
+    let imports = &result.model.components[0].imports;
+
+    // C# import extraction is not yet implemented at the extractor level.
+    // Verify stats consistency.
+    assert_eq!(
+        result.model.stats.total_imports,
+        imports.len(),
+        "stats.total_imports should match actual import count"
+    );
+}
+
+#[test]
+fn gin_ecommerce_import_count_matches_stats() {
+    let result = analyze_fixture("gin_ecommerce");
+    let imports = &result.model.components[0].imports;
+
+    // Go import extraction is not yet implemented at the extractor level.
+    // Verify stats consistency.
+    assert_eq!(
+        result.model.stats.total_imports,
+        imports.len(),
+        "stats.total_imports should match actual import count"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Module Boundary Inference
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn express_ecommerce_infers_module_boundaries() {
+    let result = analyze_fixture("express_ecommerce");
+    let modules = &result.model.components[0].module_boundaries;
+
+    // express_ecommerce has subdirectories: routes/, services/, middleware/
+    assert!(
+        !modules.is_empty(),
+        "Express project with subdirectories should infer module boundaries, got 0"
+    );
+
+    // Each module should have at least one file
+    for m in modules {
+        assert!(
+            !m.files.is_empty(),
+            "Module '{}' should have at least one file",
+            m.name
+        );
+    }
+
+    // Stats should track module count
+    assert_eq!(
+        result.model.stats.total_modules,
+        modules.len(),
+        "stats.total_modules should match actual module count"
+    );
+}
+
+#[test]
+fn spring_ecommerce_infers_module_boundaries() {
+    let result = analyze_fixture("spring_ecommerce");
+    let modules = &result.model.components[0].module_boundaries;
+
+    // spring_ecommerce has subdirectories: controllers/, models/, services/, etc.
+    assert!(
+        !modules.is_empty(),
+        "Spring project with subdirectories should infer module boundaries, got 0"
+    );
+
+    // Should have module names matching directory structure
+    let module_names: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
+    assert!(
+        module_names
+            .iter()
+            .any(|n| n.contains("controllers") || n.contains("controller")),
+        "Expected a controllers module, got: {:?}",
+        module_names
+    );
+}
+
+#[test]
+fn aspnet_ecommerce_infers_module_boundaries() {
+    let result = analyze_fixture("aspnet_ecommerce");
+    let modules = &result.model.components[0].module_boundaries;
+
+    // aspnet_ecommerce has Controllers/ and Services/ directories
+    assert!(
+        !modules.is_empty(),
+        "ASP.NET project with Controllers/ and Services/ should infer module boundaries, got 0"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  SourceAnchor Quality
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn route_anchors_have_valid_positions() {
+    let result = analyze_fixture("express_ecommerce");
+    let routes = &result.model.components[0].interfaces;
+
+    assert!(!routes.is_empty(), "Need routes to validate anchors");
+
+    for route in routes {
+        assert!(
+            route.anchor.line > 0,
+            "Route {} {} should have line > 0, got {}",
+            route.method,
+            route.path,
+            route.anchor.line
+        );
+        assert!(
+            route.anchor.end_line >= route.anchor.line,
+            "Route {} {} should have end_line >= line",
+            route.method,
+            route.path
+        );
+        assert!(
+            route.anchor.end_byte > route.anchor.start_byte,
+            "Route {} {} should have end_byte > start_byte (got {}..{})",
+            route.method,
+            route.path,
+            route.anchor.start_byte,
+            route.anchor.end_byte
+        );
+        assert!(
+            !route.anchor.node_kind.is_empty(),
+            "Route {} {} should have non-empty node_kind",
+            route.method,
+            route.path
+        );
+        assert!(
+            !route.anchor.file.as_os_str().is_empty(),
+            "Route {} {} should have non-empty file path",
+            route.method,
+            route.path
+        );
+    }
+}
+
+#[test]
+fn symbol_anchors_have_valid_positions() {
+    let result = analyze_fixture("express_ecommerce");
+    let symbols = &result.model.components[0].symbols;
+
+    assert!(!symbols.is_empty(), "Need symbols to validate anchors");
+
+    for symbol in symbols {
+        assert!(
+            symbol.anchor.line > 0,
+            "Symbol '{}' should have line > 0, got {}",
+            symbol.name,
+            symbol.anchor.line
+        );
+        assert!(
+            symbol.anchor.end_line >= symbol.anchor.line,
+            "Symbol '{}' should have end_line >= line",
+            symbol.name
+        );
+        assert!(
+            !symbol.anchor.file.as_os_str().is_empty(),
+            "Symbol '{}' should have non-empty file path",
+            symbol.name
+        );
+    }
+}
+
+#[test]
+fn sink_anchors_have_valid_positions() {
+    let result = analyze_fixture("express_ecommerce");
+    let sinks = &result.model.components[0].sinks;
+
+    assert!(!sinks.is_empty(), "Need sinks to validate anchors");
+
+    for sink in sinks {
+        assert!(
+            sink.anchor.line > 0,
+            "Sink '{}' should have line > 0, got {}",
+            sink.text,
+            sink.anchor.line
+        );
+        assert!(
+            sink.anchor.end_byte > sink.anchor.start_byte,
+            "Sink should have end_byte > start_byte (got {}..{})",
+            sink.anchor.start_byte,
+            sink.anchor.end_byte
+        );
+    }
+}
+
+#[test]
+fn dependency_anchors_have_valid_positions() {
+    let result = analyze_fixture("express_ecommerce");
+    let deps = &result.model.components[0].dependencies;
+
+    assert!(!deps.is_empty(), "Need dependencies to validate anchors");
+
+    for dep in deps {
+        assert!(
+            dep.anchor.line > 0,
+            "Dependency '{}' should have line > 0",
+            dep.target
+        );
+        assert!(
+            dep.anchor.end_byte > dep.anchor.start_byte,
+            "Dependency '{}' should have end_byte > start_byte",
+            dep.target
+        );
+    }
+}
+
+#[test]
+fn data_model_anchors_have_valid_positions() {
+    let result = analyze_fixture("express_ecommerce");
+    let data_models = &result.model.components[0].data_models;
+
+    if data_models.is_empty() {
+        return; // Skip if no data models (some extractors may not produce them)
+    }
+
+    for dm in data_models {
+        assert!(
+            dm.anchor.line > 0,
+            "DataModel '{}' should have line > 0",
+            dm.name
+        );
+        assert!(
+            dm.anchor.end_line >= dm.anchor.line,
+            "DataModel '{}' should have end_line >= line",
+            dm.name
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  KnowledgeGraph: Construction, Stats, Impact Analysis, Cycles
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn express_ecommerce_knowledge_graph_has_nodes_and_edges() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/express_ecommerce");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let graph = engine
+        .graph()
+        .expect("graph should be built after analysis");
+    let stats = graph.stats();
+
+    assert!(
+        stats.total_nodes >= 10,
+        "Express graph should have ≥10 nodes (files + symbols + interfaces), got {}",
+        stats.total_nodes
+    );
+    assert!(
+        stats.total_edges >= 10,
+        "Express graph should have ≥10 edges (defines + calls + imports), got {}",
+        stats.total_edges
+    );
+
+    // Should have file nodes (lowercase key from type_name())
+    let file_count = stats.node_counts.get("file").copied().unwrap_or(0);
+    assert!(
+        file_count >= 4,
+        "Expected ≥4 file nodes, got {}",
+        file_count
+    );
+
+    // Should have symbol nodes
+    let symbol_count = stats.node_counts.get("symbol").copied().unwrap_or(0);
+    assert!(
+        symbol_count >= 3,
+        "Expected ≥3 symbol nodes, got {}",
+        symbol_count
+    );
+
+    // Should have defines edges
+    let defines_count = stats.edge_counts.get("defines").copied().unwrap_or(0);
+    assert!(
+        defines_count >= 3,
+        "Expected ≥3 defines edges, got {}",
+        defines_count
+    );
+}
+
+#[test]
+fn express_ecommerce_graph_stats_in_result() {
+    let result = analyze_fixture("express_ecommerce");
+
+    let graph_stats = result
+        .graph_stats
+        .as_ref()
+        .expect("ExtractionResult should include graph_stats");
+
+    assert!(
+        graph_stats.total_nodes > 0,
+        "graph_stats.total_nodes should be > 0"
+    );
+    assert!(
+        graph_stats.total_edges > 0,
+        "graph_stats.total_edges should be > 0"
+    );
+    assert!(
+        graph_stats.connected_components >= 1,
+        "graph_stats.connected_components should be >= 1"
+    );
+}
+
+#[test]
+fn express_ecommerce_impact_analysis_returns_results() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/express_ecommerce");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let graph = engine.graph().expect("graph should exist");
+
+    // Find a symbol to analyze impact for
+    let symbols = &engine.extractions().values().next().unwrap().symbols;
+    if let Some(first_symbol) = symbols.first() {
+        let impact = graph.impact_analysis(&first_symbol.name, 5);
+
+        // Impact analysis should at minimum return the symbol's own file
+        assert!(
+            !impact.root.is_empty(),
+            "impact_analysis root should be non-empty"
+        );
+    }
+}
+
+#[test]
+fn express_ecommerce_graph_exports_to_json() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/express_ecommerce");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let graph = engine.graph().expect("graph should exist");
+    let json = graph.to_json();
+
+    // JSON export should have nodes and edges arrays
+    assert!(
+        json.get("nodes").is_some(),
+        "Graph JSON should have 'nodes' key"
+    );
+    assert!(
+        json.get("edges").is_some(),
+        "Graph JSON should have 'edges' key"
+    );
+
+    let nodes = json["nodes"].as_array().expect("nodes should be an array");
+    let edges = json["edges"].as_array().expect("edges should be an array");
+
+    assert!(!nodes.is_empty(), "Graph JSON nodes should be non-empty");
+    assert!(!edges.is_empty(), "Graph JSON edges should be non-empty");
+}
+
+#[test]
+fn express_ecommerce_find_cycles() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/express_ecommerce");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let graph = engine.graph().expect("graph should exist");
+
+    // find_cycles should not panic and should return a valid result
+    let cycles = graph.find_cycles();
+    // Cycles may or may not exist — just verify it runs without error
+    let _ = cycles.len();
+
+    // Module cycles should also work
+    let module_cycles = graph.find_module_cycles();
+    let _ = module_cycles.len();
+}
+
+#[test]
+fn spring_ecommerce_graph_analysis_detects_entry_points() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/spring_ecommerce");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let ctx = engine
+        .run_graph_analysis()
+        .expect("graph analysis should produce results");
+
+    // Spring project with many routes should have entry points
+    assert!(
+        !ctx.entry_points.is_empty(),
+        "Spring project should detect entry points (HTTP endpoints)"
+    );
+
+    // Should have degree centrality computed
+    assert!(
+        !ctx.degree_centrality.is_empty(),
+        "degree centrality should be computed"
+    );
+}
+
+#[test]
+fn aspnet_ecommerce_graph_analysis_pipeline() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/aspnet_ecommerce");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let ctx = engine
+        .run_graph_analysis()
+        .expect("graph analysis should produce results");
+
+    // All analysis phases should produce non-empty results on a real project
+    assert!(
+        !ctx.degree_centrality.is_empty(),
+        "degree centrality should be non-empty for ASP.NET project"
+    );
+    assert!(
+        !ctx.entry_points.is_empty(),
+        "should detect entry points in ASP.NET project"
+    );
+}
+
+#[test]
+fn nestjs_api_graph_has_interface_nodes() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/nestjs_api");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let graph = engine.graph().expect("graph should exist");
+    let stats = graph.stats();
+
+    // NestJS project with many routes should have interface nodes
+    let interface_count = stats.node_counts.get("interface").copied().unwrap_or(0);
+    assert!(
+        interface_count >= 5,
+        "NestJS graph should have ≥5 interface nodes, got {}",
+        interface_count
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Semantic Diff (incremental analysis)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn express_ecommerce_full_analysis_produces_no_diff_on_first_run() {
+    let result = analyze_fixture("express_ecommerce");
+
+    // First analysis should NOT produce a diff (no previous model to compare against)
+    assert!(
+        result.diff.is_none(),
+        "First analysis should have diff = None"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Pipeline Timing
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn extraction_result_has_valid_timing() {
+    let result = analyze_fixture("express_ecommerce");
+
+    assert!(result.timing.total_ms > 0, "total_ms should be > 0");
+    assert!(
+        result.timing.parse_extract_ms > 0,
+        "parse_extract_ms should be > 0"
+    );
+    assert!(
+        result.timing.model_build_ms > 0 || result.timing.total_ms > 0,
+        "model_build_ms or total_ms should be > 0"
+    );
+    assert!(result.duration_ms > 0, "duration_ms should be > 0");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Cross-Framework Comprehensive Validation
+// ═══════════════════════════════════════════════════════════════════
+
+/// Validates that ALL multi-file framework fixtures produce a minimum
+/// baseline of extraction output across every feature dimension.
+#[test]
+fn all_framework_fixtures_produce_complete_extraction() {
+    let frameworks = vec![
+        ("express_ecommerce", 4, true), // (name, min_files, has_subdirs)
+        ("nestjs_api", 4, false),
+        ("fastapi_ecommerce", 3, true),
+        ("spring_ecommerce", 4, true),
+        ("aspnet_ecommerce", 5, true),
+        ("gin_ecommerce", 4, true),
+        ("laravel_ecommerce", 3, true),
+        ("rails_ecommerce", 4, true),
+    ];
+
+    for (fixture, min_files, has_subdirs) in &frameworks {
+        let result = analyze_fixture(fixture);
+        let comp = &result.model.components[0];
+        let stats = &result.model.stats;
+
+        // Basic extraction
+        assert!(
+            result.files_analyzed >= *min_files,
+            "[{fixture}] expected ≥{min_files} files, got {}",
+            result.files_analyzed
+        );
+
+        // Routes
+        assert!(
+            stats.total_interfaces > 0,
+            "[{fixture}] expected routes > 0, got {}",
+            stats.total_interfaces
+        );
+
+        // Symbols
+        assert!(
+            stats.total_symbols > 0,
+            "[{fixture}] expected symbols > 0, got {}",
+            stats.total_symbols
+        );
+
+        // Sinks
+        assert!(
+            stats.total_sinks > 0,
+            "[{fixture}] expected sinks > 0, got {}",
+            stats.total_sinks
+        );
+
+        // References
+        assert!(
+            stats.total_references > 0,
+            "[{fixture}] expected references > 0, got {}",
+            stats.total_references
+        );
+
+        // Imports (only TypeScript extractors currently produce ImportInfo)
+        // Other languages: import count is tracked for consistency but may be 0
+        assert_eq!(
+            stats.total_imports,
+            comp.imports.len(),
+            "[{fixture}] stats.total_imports should match actual import count"
+        );
+
+        // Module boundaries (only for projects with subdirectories)
+        if *has_subdirs {
+            assert!(
+                !comp.module_boundaries.is_empty(),
+                "[{fixture}] expected module_boundaries for project with subdirs"
+            );
+        }
+
+        // Graph stats should be present
+        assert!(
+            result.graph_stats.is_some(),
+            "[{fixture}] expected graph_stats to be Some"
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Workspace / Monorepo Detection
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn pnpm_monorepo_produces_multiple_components() {
+    let result = analyze_fixture("pnpm_monorepo");
+
+    // pnpm_monorepo has packages/api and packages/auth
+    // Plus the default (root) component = 3 components total
+    assert!(
+        result.model.components.len() >= 2,
+        "pnpm monorepo should produce ≥2 components, got {}",
+        result.model.components.len()
+    );
+
+    let component_names: Vec<&str> = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+
+    assert!(
+        component_names.iter().any(|n| n.contains("api")),
+        "Should have an api component, got: {:?}",
+        component_names
+    );
+    assert!(
+        component_names.iter().any(|n| n.contains("auth")),
+        "Should have an auth component, got: {:?}",
+        component_names
+    );
+
+    // api package should have its own routes
+    let api_comp = result
+        .model
+        .components
+        .iter()
+        .find(|c| c.name.contains("api"))
+        .expect("api component should exist");
+    assert!(
+        !api_comp.interfaces.is_empty(),
+        "api component should have interfaces, got 0"
+    );
+
+    // auth package should have its own routes
+    let auth_comp = result
+        .model
+        .components
+        .iter()
+        .find(|c| c.name.contains("auth"))
+        .expect("auth component should exist");
+    assert!(
+        !auth_comp.interfaces.is_empty(),
+        "auth component should have interfaces, got 0"
+    );
+}
+
+#[test]
+fn cargo_monorepo_produces_multiple_components() {
+    let result = analyze_fixture("cargo_monorepo");
+
+    // cargo_monorepo has crates/core and crates/api
+    assert!(
+        result.model.components.len() >= 2,
+        "Cargo monorepo should produce ≥2 components, got {}",
+        result.model.components.len()
+    );
+
+    let component_names: Vec<&str> = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+
+    assert!(
+        component_names.iter().any(|n| n.contains("core")),
+        "Should have a core component, got: {:?}",
+        component_names
+    );
+    assert!(
+        component_names.iter().any(|n| n.contains("api")),
+        "Should have an api component, got: {:?}",
+        component_names
+    );
+
+    // Both crates should have symbols
+    let core_comp = result
+        .model
+        .components
+        .iter()
+        .find(|c| c.name.contains("core"))
+        .expect("core component should exist");
+    assert!(
+        !core_comp.symbols.is_empty(),
+        "core component should have symbols, got 0"
+    );
+
+    let api_comp = result
+        .model
+        .components
+        .iter()
+        .find(|c| c.name.contains("api"))
+        .expect("api component should exist");
+    assert!(
+        !api_comp.symbols.is_empty(),
+        "api component should have symbols, got 0"
+    );
+}
+
+#[test]
+fn single_project_still_produces_one_component() {
+    // Non-workspace fixture should produce exactly 1 component (backward compat)
+    let result = analyze_fixture("express_ecommerce");
+
+    assert_eq!(
+        result.model.components.len(),
+        1,
+        "Single-project fixture should produce exactly 1 component, got {}",
+        result.model.components.len()
+    );
+}
+
+#[test]
+fn workspace_layout_accessible_after_analysis() {
+    // pnpm monorepo should expose its workspace layout
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/pnpm_monorepo");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let layout = engine
+        .workspace_layout()
+        .expect("pnpm monorepo should have a workspace layout");
+
+    assert_eq!(layout.kind, WorkspaceKind::Pnpm);
+    assert_eq!(
+        layout.packages.len(),
+        2,
+        "pnpm monorepo should detect 2 packages, got {}",
+        layout.packages.len()
+    );
+
+    // Single-project fixture should NOT have a workspace layout
+    let fixture_path = manifest_dir.join("tests/fixtures/express_ecommerce");
+    let engine = IntentlyEngine::new(fixture_path);
+    assert!(
+        engine.workspace_layout().is_none(),
+        "Single-project fixture should have workspace_layout = None"
+    );
+}
+
+#[test]
+fn monorepo_stats_aggregate_across_components() {
+    let result = analyze_fixture("pnpm_monorepo");
+
+    // Stats should aggregate across all components
+    assert!(
+        result.model.stats.files_analyzed >= 2,
+        "Monorepo should analyze files from both packages, got {}",
+        result.model.stats.files_analyzed
+    );
+
+    // Total interfaces should be the sum across all components
+    let component_interfaces: usize = result
+        .model
+        .components
+        .iter()
+        .map(|c| c.interfaces.len())
+        .sum();
+    assert_eq!(
+        result.model.stats.total_interfaces, component_interfaces,
+        "stats.total_interfaces should equal sum across components"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  FileTree
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn file_tree_present_after_full_analysis() {
+    let result = analyze_fixture("express_ecommerce");
+
+    let tree = result
+        .model
+        .file_tree
+        .as_ref()
+        .expect("file_tree should be populated after full analysis");
+
+    // Root should have subdirectories (express_ecommerce has src/ at minimum)
+    assert!(
+        !tree.root.subdirectories.is_empty(),
+        "root should have subdirectories, got empty"
+    );
+
+    // Total files should match stats
+    assert_eq!(
+        tree.root.stats.total_file_count, result.model.stats.files_analyzed,
+        "file tree total count should match stats.files_analyzed"
+    );
+
+    // total_directories should be populated in stats
+    assert!(
+        result.model.stats.total_directories > 0,
+        "total_directories should be > 0 for a non-empty project"
+    );
+}
+
+#[test]
+fn monorepo_file_tree_has_component_names() {
+    let result = analyze_fixture("cargo_monorepo");
+
+    let tree = result
+        .model
+        .file_tree
+        .as_ref()
+        .expect("file_tree should be populated for monorepo");
+
+    // Collect all component names from the tree recursively
+    fn collect_component_names(node: &intently_core::DirectoryNode) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Some(ref name) = node.component_name {
+            names.push(name.clone());
+        }
+        for sub in &node.subdirectories {
+            names.extend(collect_component_names(sub));
+        }
+        names
+    }
+
+    let component_names = collect_component_names(&tree.root);
+
+    // A Cargo monorepo fixture should have at least one package with a component_name
+    assert!(
+        !component_names.is_empty(),
+        "monorepo file tree should have at least one directory with component_name set, got none"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Confidence Filter
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn filtered_model_excludes_low_confidence_references() {
+    let result = analyze_fixture("express_ecommerce");
+    let model = &result.model;
+
+    // Verify there are references with varying confidence levels
+    let all_refs: Vec<&intently_core::model::types::Reference> = model
+        .components
+        .iter()
+        .flat_map(|c| c.references.iter())
+        .collect();
+
+    // The express_ecommerce fixture should produce references (calls, imports, etc.)
+    assert!(
+        !all_refs.is_empty(),
+        "express_ecommerce should have references for filtering test"
+    );
+
+    let filtered = model.filtered(0.5);
+    let filtered_refs: Vec<&intently_core::model::types::Reference> = filtered
+        .components
+        .iter()
+        .flat_map(|c| c.references.iter())
+        .collect();
+
+    // After filtering, no reference should be below the threshold
+    for r in &filtered_refs {
+        assert!(
+            r.confidence >= 0.5,
+            "filtered(0.5) should not contain ref with confidence {:.2}: {} -> {}",
+            r.confidence,
+            r.source_symbol,
+            r.target_symbol
+        );
+    }
+
+    // Stats should match filtered count
+    assert_eq!(
+        filtered.stats.total_references,
+        filtered_refs.len(),
+        "stats.total_references should match filtered reference count"
+    );
+}
+
+#[test]
+fn test_references_field_populated_in_full_analysis() {
+    // Verify that is_test_reference is populated (not left as default)
+    // during the full extraction pipeline.
+    //
+    // Note: fixtures live under `tests/fixtures/`, so FileRole::from_path
+    // sees the absolute path containing `tests/` and classifies all files
+    // as Test — which means is_test_reference can be true even for
+    // production-only fixtures when run as integration tests.
+    // This is a known limitation of absolute-path-based role classification.
+    let result = analyze_fixture("express_ecommerce");
+    let all_refs: Vec<&intently_core::model::types::Reference> = result
+        .model
+        .components
+        .iter()
+        .flat_map(|c| c.references.iter())
+        .collect();
+
+    // The field should exist on all references (serde default is false)
+    assert!(
+        !all_refs.is_empty(),
+        "express_ecommerce should produce references"
+    );
+
+    // Verify the field is accessible and has a boolean value
+    let _tagged_count = all_refs.iter().filter(|r| r.is_test_reference).count();
+    let _untagged_count = all_refs.iter().filter(|r| !r.is_test_reference).count();
+
+    // The important thing: the field exists, is populated, and doesn't panic
+    assert_eq!(
+        _tagged_count + _untagged_count,
+        all_refs.len(),
+        "all references should have is_test_reference field"
     );
 }

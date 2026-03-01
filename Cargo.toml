@@ -28,7 +28,11 @@ ast-grep-core = "0.41"
 petgraph = "0.8"
 rayon = "1"
 similar = "2"
+sha2 = "0.10"
 walkdir = "2"
+toml = "0.8"
+serde_yaml = "0.9"
+glob = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

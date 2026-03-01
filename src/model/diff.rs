@@ -238,7 +238,9 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 0,
                 avg_resolution_confidence: 0.0,
+                ..Default::default()
             },
+            file_tree: None,
         }
     }
 

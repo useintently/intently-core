@@ -1,6 +1,7 @@
 pub mod builder;
 pub mod diff;
 pub mod extractors;
+pub mod file_tree;
 pub mod graph;
 pub mod graph_analysis;
 pub mod import_resolver;

@@ -671,6 +671,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.95,
                         resolution_method: ResolutionMethod::ImportBased,
+                        is_test_reference: false,
                     },
                     Reference {
                         source_symbol: "findAll".into(),
@@ -682,6 +683,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.90,
                         resolution_method: ResolutionMethod::SameFile,
+                        is_test_reference: false,
                     },
                     // findAll -> external db call
                     Reference {
@@ -694,6 +696,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.0,
                         resolution_method: ResolutionMethod::Unresolved,
+                        is_test_reference: false,
                     },
                 ],
                 data_models: vec![],
@@ -711,7 +714,9 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 2,
                 avg_resolution_confidence: 0.617,
+                ..Default::default()
             },
+            file_tree: None,
         }
     }
 
@@ -746,7 +751,9 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 0,
                 avg_resolution_confidence: 0.0,
+                ..Default::default()
             },
+            file_tree: None,
         };
         let graph = KnowledgeGraph::from_code_model(&empty_model);
         let ctx = AnalysisPipeline::standard().run(&graph);
@@ -788,6 +795,7 @@ mod tests {
             project_name: "empty".into(),
             components: vec![],
             stats: CodeModelStats::default(),
+            file_tree: None,
         };
         let graph = KnowledgeGraph::from_code_model(&empty_model);
         let mut ctx = AnalysisContext::default();
@@ -864,6 +872,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.95,
                         resolution_method: ResolutionMethod::ImportBased,
+                        is_test_reference: false,
                     },
                     Reference {
                         source_symbol: "B".into(),
@@ -875,6 +884,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.90,
                         resolution_method: ResolutionMethod::SameFile,
+                        is_test_reference: false,
                     },
                 ],
                 data_models: vec![],
@@ -892,7 +902,9 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 2,
                 avg_resolution_confidence: 0.925,
+                ..Default::default()
             },
+            file_tree: None,
         };
 
         let graph = KnowledgeGraph::from_code_model(&model);
@@ -947,6 +959,7 @@ mod tests {
             project_name: "empty".into(),
             components: vec![],
             stats: CodeModelStats::default(),
+            file_tree: None,
         };
         let graph = KnowledgeGraph::from_code_model(&empty_model);
         let ctx = AnalysisPipeline::new()
@@ -1002,6 +1015,7 @@ mod tests {
             project_name: "empty".into(),
             components: vec![],
             stats: CodeModelStats::default(),
+            file_tree: None,
         };
         let graph = KnowledgeGraph::from_code_model(&empty_model);
         let ctx = AnalysisPipeline::standard().run(&graph);
@@ -1058,6 +1072,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.95,
                         resolution_method: ResolutionMethod::ImportBased,
+                        is_test_reference: false,
                     },
                     Reference {
                         source_symbol: "B".into(),
@@ -1069,6 +1084,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.90,
                         resolution_method: ResolutionMethod::SameFile,
+                        is_test_reference: false,
                     },
                 ],
                 data_models: vec![],
@@ -1086,7 +1102,9 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 2,
                 avg_resolution_confidence: 0.925,
+                ..Default::default()
             },
+            file_tree: None,
         };
 
         let graph = KnowledgeGraph::from_code_model(&model);

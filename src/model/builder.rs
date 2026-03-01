@@ -1,7 +1,11 @@
 //! CodeModel builder: aggregates per-file extractions into a CodeModel.
 //!
-//! MVP simplification: all files belong to a single Component.
-//! The builder sorts all collections for deterministic JSON output.
+//! Supports multi-component builds: each workspace package becomes a
+//! separate `Component` in the `CodeModel`, with its own import resolution
+//! root and module boundary inference.
+//!
+//! For single-project repos, all files belong to a single default Component
+//! (backward compatible with the original MVP behavior).
 //!
 //! `CodeModelBuilder` supports incremental updates: when a file changes,
 //! call `set_file` to replace its contributions without rebuilding
@@ -10,9 +14,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::file_tree::{self, FileMeta};
 use super::types::*;
 use crate::error::Result;
 use crate::parser::SupportedLanguage;
+use crate::workspace::WorkspaceLayout;
 
 /// Tracks what a single file contributed to the code model.
 #[derive(Debug, Clone)]
@@ -25,38 +31,78 @@ struct FileContribution {
     imports: Vec<ImportInfo>,
     references: Vec<Reference>,
     data_models: Vec<DataModel>,
+    file_role: FileRole,
+    estimated_tokens: u64,
 }
 
-/// Incremental code model builder that tracks per-file contributions.
+/// Per-component state within the builder.
+///
+/// Each component has its own root path (for import resolution) and
+/// its own set of file contributions.
+#[derive(Debug, Clone)]
+struct ComponentState {
+    root: PathBuf,
+    contributions: HashMap<PathBuf, FileContribution>,
+}
+
+/// Incremental code model builder that tracks per-file contributions
+/// across one or more components.
 ///
 /// Instead of rebuilding the entire code model on every change, `CodeModelBuilder`
 /// maintains a map of what each file contributed (interfaces, deps, sinks,
 /// symbols). When a file changes, only its contributions are replaced.
 ///
 /// During `build()`, post-processing runs import resolution and module
-/// boundary inference across all aggregated contributions.
+/// boundary inference per component, each using its own root path.
 pub struct CodeModelBuilder {
     project_name: String,
     project_root: PathBuf,
-    contributions: HashMap<PathBuf, FileContribution>,
+    components: HashMap<String, ComponentState>,
+    default_component: String,
+    /// Optional workspace layout for component-aware file tree construction.
+    workspace_layout: Option<WorkspaceLayout>,
 }
 
 impl CodeModelBuilder {
     /// Create a new empty builder.
     pub fn new(project_name: &str) -> Self {
+        let default_name = project_name.to_string();
+        let mut components = HashMap::new();
+        components.insert(
+            default_name.clone(),
+            ComponentState {
+                root: PathBuf::new(),
+                contributions: HashMap::new(),
+            },
+        );
+
         Self {
             project_name: project_name.to_string(),
             project_root: PathBuf::new(),
-            contributions: HashMap::new(),
+            components,
+            default_component: default_name,
+            workspace_layout: None,
         }
     }
 
     /// Create a new builder with a project root for import resolution.
     pub fn with_root(project_name: &str, project_root: &Path) -> Self {
+        let default_name = project_name.to_string();
+        let mut components = HashMap::new();
+        components.insert(
+            default_name.clone(),
+            ComponentState {
+                root: project_root.to_path_buf(),
+                contributions: HashMap::new(),
+            },
+        );
+
         Self {
             project_name: project_name.to_string(),
             project_root: project_root.to_path_buf(),
-            contributions: HashMap::new(),
+            components,
+            default_component: default_name,
+            workspace_layout: None,
         }
     }
 
@@ -69,7 +115,30 @@ impl CodeModelBuilder {
         builder
     }
 
-    /// Add or replace a file's contributions.
+    /// Set the root path for a named component.
+    ///
+    /// If the component doesn't exist yet, creates it with an empty
+    /// contribution set. The root path is used for per-component import
+    /// resolution and module boundary inference.
+    pub fn set_component_root(&mut self, component_name: &str, root: &Path) {
+        self.components
+            .entry(component_name.to_string())
+            .and_modify(|state| state.root = root.to_path_buf())
+            .or_insert_with(|| ComponentState {
+                root: root.to_path_buf(),
+                contributions: HashMap::new(),
+            });
+    }
+
+    /// Set the workspace layout for component-aware file tree construction.
+    ///
+    /// When set, the file tree builder uses this layout to assign
+    /// `component_name` to directory nodes based on longest-prefix matching.
+    pub fn set_workspace_layout(&mut self, layout: WorkspaceLayout) {
+        self.workspace_layout = Some(layout);
+    }
+
+    /// Add or replace a file's contributions in the default component.
     ///
     /// If the file was previously tracked, its old contributions are removed
     /// before the new ones are added.
@@ -77,6 +146,25 @@ impl CodeModelBuilder {
         // Delegate to update_file with an infallible closure.
         // The unwrap is safe because the closure never returns Err.
         let _ = self.update_file(extraction, |new| Ok(new.clone()));
+    }
+
+    /// Add or replace a file's contributions in a specific named component.
+    ///
+    /// If the component doesn't exist yet, creates it with the project root
+    /// as its root path. Use `set_component_root()` beforehand for correct
+    /// per-package import resolution.
+    pub fn set_file_in_component(&mut self, extraction: &FileExtraction, component_name: &str) {
+        let contribution = extraction_to_contribution(extraction);
+        let state = self
+            .components
+            .entry(component_name.to_string())
+            .or_insert_with(|| ComponentState {
+                root: self.project_root.clone(),
+                contributions: HashMap::new(),
+            });
+        state
+            .contributions
+            .insert(extraction.file.clone(), contribution);
     }
 
     /// Atomically update a file's contributions using a closure.
@@ -93,37 +181,167 @@ impl CodeModelBuilder {
     {
         let resolved = f(extraction)?;
 
-        let contribution = FileContribution {
-            language: resolved.language,
-            interfaces: resolved.interfaces.clone(),
-            dependencies: resolved.dependencies.clone(),
-            sinks: resolved.sinks.clone(),
-            symbols: resolved.symbols.clone(),
-            imports: resolved.imports.clone(),
-            references: resolved.references.clone(),
-            data_models: resolved.data_models.clone(),
-        };
-        self.contributions
+        let contribution = extraction_to_contribution(&resolved);
+        let state = self
+            .components
+            .get_mut(&self.default_component)
+            .expect("default component always exists");
+        state
+            .contributions
             .insert(resolved.file.clone(), contribution);
         Ok(())
     }
 
     /// Check whether the builder has contributions for a given file.
     pub fn has_file(&self, path: &Path) -> bool {
-        self.contributions.contains_key(path)
+        self.components
+            .values()
+            .any(|state| state.contributions.contains_key(path))
     }
 
     /// Remove a file's contributions from the builder.
+    ///
+    /// Searches all components for the file path and removes from
+    /// whichever component owns it.
     pub fn remove_file(&mut self, path: &Path) {
-        self.contributions.remove(path);
+        for state in self.components.values_mut() {
+            if state.contributions.remove(path).is_some() {
+                return;
+            }
+        }
     }
 
     /// Produce a sorted, deterministic CodeModel snapshot.
     ///
-    /// After aggregating per-file contributions, runs two post-processing steps:
-    /// 1. **Import resolution** — resolves relative imports to target files/symbols
-    /// 2. **Module inference** — groups files into logical modules with dependencies
+    /// Iterates over all components, building a `Component` for each.
+    /// Per-component post-processing runs:
+    /// 1. **Import resolution** — resolves relative imports using the component's root
+    /// 2. **Module inference** — groups files into modules relative to the component root
+    ///
+    /// Stats are aggregated across all components.
     pub fn build(&self) -> CodeModel {
+        let mut all_components = Vec::new();
+
+        // Accumulate stats across all components
+        let mut total_files = 0;
+        let mut total_interfaces = 0;
+        let mut total_dependencies = 0;
+        let mut total_sinks = 0;
+        let mut total_symbols = 0;
+        let mut total_imports = 0;
+        let mut total_references = 0;
+        let mut total_data_models = 0;
+        let mut total_modules = 0;
+        let mut total_resolved_references = 0;
+        let mut total_confidence_sum: f64 = 0.0;
+        let mut total_ref_count = 0;
+        let mut file_roles: HashMap<String, usize> = HashMap::new();
+        let mut total_estimated_tokens: u64 = 0;
+
+        // Sort component names for deterministic output
+        let mut component_names: Vec<&String> = self.components.keys().collect();
+        component_names.sort();
+
+        for name in component_names {
+            let state = &self.components[name];
+            let component = self.build_component(name, state);
+
+            // Aggregate stats
+            total_files += state.contributions.len();
+            total_interfaces += component.interfaces.len();
+            total_dependencies += component.dependencies.len();
+            total_sinks += component.sinks.len();
+            total_symbols += component.symbols.len();
+            total_imports += component.imports.len();
+            total_references += component.references.len();
+            total_data_models += component.data_models.len();
+            total_modules += component.module_boundaries.len();
+            total_resolved_references += component
+                .references
+                .iter()
+                .filter(|r| r.confidence > 0.0)
+                .count();
+            total_confidence_sum += component
+                .references
+                .iter()
+                .map(|r| r.confidence)
+                .sum::<f64>();
+            total_ref_count += component.references.len();
+
+            for contrib in state.contributions.values() {
+                let role_key = contrib.file_role.as_str().to_string();
+                *file_roles.entry(role_key).or_insert(0) += 1;
+                total_estimated_tokens += contrib.estimated_tokens;
+            }
+
+            all_components.push(component);
+        }
+
+        let avg_resolution_confidence = if total_ref_count == 0 {
+            0.0
+        } else {
+            total_confidence_sum / total_ref_count as f64
+        };
+
+        // Build file tree from all contributions across all components
+        let all_file_metas: Vec<FileMeta> = self
+            .components
+            .values()
+            .flat_map(|state| {
+                state.contributions.iter().map(|(path, contrib)| FileMeta {
+                    path: path.clone(),
+                    role: contrib.file_role,
+                    language: contrib.language,
+                    estimated_tokens: contrib.estimated_tokens,
+                })
+            })
+            .collect();
+
+        let all_refs: Vec<&Reference> = all_components
+            .iter()
+            .flat_map(|c| c.references.iter())
+            .collect();
+
+        let file_tree = file_tree::build_file_tree(
+            &all_file_metas,
+            &all_refs,
+            &self.project_root,
+            self.workspace_layout.as_ref(),
+        );
+        let total_directories = file_tree::count_directories(&file_tree);
+
+        let stats = CodeModelStats {
+            files_analyzed: total_files,
+            total_interfaces,
+            total_dependencies,
+            total_sinks,
+            total_symbols,
+            total_imports,
+            total_references,
+            total_data_models,
+            total_modules,
+            resolved_references: total_resolved_references,
+            avg_resolution_confidence,
+            file_roles,
+            total_estimated_tokens,
+            total_directories,
+        };
+
+        CodeModel {
+            version: "1.0".into(),
+            project_name: self.project_name.clone(),
+            components: all_components,
+            stats,
+            file_tree: Some(file_tree),
+        }
+    }
+
+    /// Build a single `Component` from a `ComponentState`.
+    ///
+    /// Runs post-processing (import resolution, module inference) using
+    /// the component's own root path — critical for monorepos where each
+    /// package has its own relative import context.
+    fn build_component(&self, name: &str, state: &ComponentState) -> Component {
         let mut interfaces = Vec::new();
         let mut dependencies = Vec::new();
         let mut sinks = Vec::new();
@@ -137,7 +355,7 @@ impl CodeModelBuilder {
         let mut file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();
         let mut file_symbols: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
 
-        for (path, contribution) in &self.contributions {
+        for (path, contribution) in &state.contributions {
             interfaces.extend(contribution.interfaces.iter().cloned());
             dependencies.extend(contribution.dependencies.iter().cloned());
             sinks.extend(contribution.sinks.iter().cloned());
@@ -153,21 +371,37 @@ impl CodeModelBuilder {
 
         // Post-processing: resolve ALL references (imports + calls + hierarchy)
         // via the two-level symbol table for confident cross-file resolution.
+        // Uses the component's root, not the workspace root.
         let all_resolved = super::import_resolver::resolve_all_references(
             &file_imports,
             &file_symbols,
-            &references, // pass raw extractor refs for resolution
-            &self.project_root,
+            &references,
+            &state.root,
         );
-        // Replace raw refs with resolved ones (resolve_all_references includes
-        // both import refs and resolved call/hierarchy refs).
         references = all_resolved;
 
-        // Post-processing: infer module boundaries
+        // Tag test→production references: a reference is a "test reference"
+        // when the source file is a test file and the target is NOT a test file.
+        // This enables downstream consumers to separate test coupling edges
+        // from production architecture.
+        for reference in &mut references {
+            let source_is_test = state
+                .contributions
+                .get(&reference.source_file)
+                .is_some_and(|c| c.file_role == FileRole::Test);
+            let target_is_test = reference
+                .target_file
+                .as_ref()
+                .and_then(|tf| state.contributions.get(tf))
+                .is_some_and(|c| c.file_role == FileRole::Test);
+            reference.is_test_reference = source_is_test && !target_is_test;
+        }
+
+        // Post-processing: infer module boundaries relative to the component root.
         let module_boundaries = super::module_inference::infer_module_boundaries(
             &file_symbols,
             &file_imports,
-            &self.project_root,
+            &state.root,
         );
 
         // Sort for deterministic output
@@ -186,30 +420,8 @@ impl CodeModelBuilder {
 
         let language = dominant_language_from_counts(&lang_counts);
 
-        // Compute resolution statistics
-        let resolved_references = references.iter().filter(|r| r.confidence > 0.0).count();
-        let avg_resolution_confidence = if references.is_empty() {
-            0.0
-        } else {
-            references.iter().map(|r| r.confidence).sum::<f64>() / references.len() as f64
-        };
-
-        let stats = CodeModelStats {
-            files_analyzed: self.contributions.len(),
-            total_interfaces: interfaces.len(),
-            total_dependencies: dependencies.len(),
-            total_sinks: sinks.len(),
-            total_symbols: symbols.len(),
-            total_imports: imports.len(),
-            total_references: references.len(),
-            total_data_models: data_models.len(),
-            total_modules: module_boundaries.len(),
-            resolved_references,
-            avg_resolution_confidence,
-        };
-
-        let component = Component {
-            name: self.project_name.clone(),
+        Component {
+            name: name.to_string(),
             language,
             interfaces,
             dependencies,
@@ -219,22 +431,31 @@ impl CodeModelBuilder {
             references,
             data_models,
             module_boundaries,
-        };
-
-        CodeModel {
-            version: "1.0".into(),
-            project_name: self.project_name.clone(),
-            components: vec![component],
-            stats,
         }
+    }
+}
+
+/// Convert a `FileExtraction` into a `FileContribution`.
+fn extraction_to_contribution(extraction: &FileExtraction) -> FileContribution {
+    FileContribution {
+        language: extraction.language,
+        interfaces: extraction.interfaces.clone(),
+        dependencies: extraction.dependencies.clone(),
+        sinks: extraction.sinks.clone(),
+        symbols: extraction.symbols.clone(),
+        imports: extraction.imports.clone(),
+        references: extraction.references.clone(),
+        data_models: extraction.data_models.clone(),
+        file_role: extraction.file_role,
+        estimated_tokens: extraction.estimated_tokens,
     }
 }
 
 /// Build a CodeModel from a set of per-file extractions.
 ///
 /// Convenience wrapper around `CodeModelBuilder::from_extractions(...).build()`.
-/// All extractions are merged into a single Component (MVP assumption:
-/// one project = one service). Collections are sorted for determinism.
+/// All extractions are merged into a single Component. Collections are sorted
+/// for determinism.
 pub fn build_code_model(extractions: &[FileExtraction], project_name: &str) -> CodeModel {
     CodeModelBuilder::from_extractions(extractions, project_name).build()
 }
@@ -272,6 +493,9 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 0,
+            content_hash: None,
         }
     }
 
@@ -409,6 +633,9 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 0,
+            content_hash: None,
         };
 
         let model = build_code_model(&[ext], "proj");
@@ -570,6 +797,9 @@ mod tests {
             ],
             references: vec![],
             data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 0,
+            content_hash: None,
         };
         builder.set_file(&ext);
         let model = builder.build();
@@ -607,6 +837,9 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 0,
+            content_hash: None,
         };
         builder.set_file(&ext);
         let model = builder.build();
@@ -635,6 +868,9 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 0,
+            content_hash: None,
         };
         builder.set_file(&ext);
         assert_eq!(builder.build().stats.total_imports, 1);
@@ -662,6 +898,9 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 0,
+            content_hash: None,
         };
         let ext2 = FileExtraction {
             file: PathBuf::from("src/b.ts"),
@@ -677,6 +916,9 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 0,
+            content_hash: None,
         };
         builder.set_file(&ext1);
         builder.set_file(&ext2);
@@ -802,5 +1044,377 @@ mod tests {
         let new_ext = make_extraction("src/app.ts", vec![], vec![]);
         let result = builder.update_file(&new_ext, |new| Ok(new.clone()));
         assert!(result.is_ok());
+    }
+
+    // --- Multi-component tests ---
+
+    #[test]
+    fn multi_component_build_produces_n_components() {
+        let mut builder = CodeModelBuilder::with_root("monorepo", Path::new("/repo"));
+        builder.set_component_root("api", Path::new("/repo/packages/api"));
+        builder.set_component_root("auth", Path::new("/repo/packages/auth"));
+
+        let api_ext = make_extraction(
+            "/repo/packages/api/src/index.ts",
+            vec![Interface {
+                method: HttpMethod::Get,
+                path: "/health".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(
+                    PathBuf::from("/repo/packages/api/src/index.ts"),
+                    1,
+                ),
+            }],
+            vec![],
+        );
+        let auth_ext = make_extraction(
+            "/repo/packages/auth/src/index.ts",
+            vec![Interface {
+                method: HttpMethod::Post,
+                path: "/login".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(
+                    PathBuf::from("/repo/packages/auth/src/index.ts"),
+                    1,
+                ),
+            }],
+            vec![],
+        );
+
+        builder.set_file_in_component(&api_ext, "api");
+        builder.set_file_in_component(&auth_ext, "auth");
+
+        let model = builder.build();
+
+        // 3 components: api, auth, and the default (monorepo) which is empty
+        assert_eq!(model.components.len(), 3);
+
+        let api_comp = model.components.iter().find(|c| c.name == "api").unwrap();
+        assert_eq!(api_comp.interfaces.len(), 1);
+        assert_eq!(api_comp.interfaces[0].path, "/health");
+
+        let auth_comp = model.components.iter().find(|c| c.name == "auth").unwrap();
+        assert_eq!(auth_comp.interfaces.len(), 1);
+        assert_eq!(auth_comp.interfaces[0].path, "/login");
+
+        assert_eq!(model.stats.files_analyzed, 2);
+        assert_eq!(model.stats.total_interfaces, 2);
+    }
+
+    #[test]
+    fn set_file_routes_to_default_component() {
+        let mut builder = CodeModelBuilder::new("proj");
+        builder.set_component_root("other", Path::new("/other"));
+
+        let ext = make_extraction(
+            "src/app.ts",
+            vec![Interface {
+                method: HttpMethod::Get,
+                path: "/default".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+            }],
+            vec![],
+        );
+        builder.set_file(&ext);
+
+        let model = builder.build();
+        let default = model.components.iter().find(|c| c.name == "proj").unwrap();
+        assert_eq!(default.interfaces.len(), 1);
+        assert_eq!(default.interfaces[0].path, "/default");
+    }
+
+    #[test]
+    fn remove_file_finds_across_components() {
+        let mut builder = CodeModelBuilder::with_root("mono", Path::new("/repo"));
+        builder.set_component_root("pkg", Path::new("/repo/pkg"));
+
+        let ext = make_extraction(
+            "/repo/pkg/src/lib.ts",
+            vec![Interface {
+                method: HttpMethod::Get,
+                path: "/in-pkg".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(PathBuf::from("/repo/pkg/src/lib.ts"), 1),
+            }],
+            vec![],
+        );
+        builder.set_file_in_component(&ext, "pkg");
+
+        assert!(builder.has_file(Path::new("/repo/pkg/src/lib.ts")));
+
+        builder.remove_file(Path::new("/repo/pkg/src/lib.ts"));
+
+        assert!(!builder.has_file(Path::new("/repo/pkg/src/lib.ts")));
+        let pkg = builder
+            .build()
+            .components
+            .into_iter()
+            .find(|c| c.name == "pkg")
+            .unwrap();
+        assert!(pkg.interfaces.is_empty());
+    }
+
+    #[test]
+    fn multi_component_stats_aggregate_correctly() {
+        let mut builder = CodeModelBuilder::with_root("mono", Path::new("/repo"));
+        builder.set_component_root("a", Path::new("/repo/a"));
+        builder.set_component_root("b", Path::new("/repo/b"));
+
+        let ext_a = FileExtraction {
+            file: PathBuf::from("/repo/a/src/lib.ts"),
+            language: SupportedLanguage::TypeScript,
+            interfaces: vec![Interface {
+                method: HttpMethod::Get,
+                path: "/a".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(PathBuf::from("/repo/a/src/lib.ts"), 1),
+            }],
+            dependencies: vec![],
+            sinks: vec![Sink {
+                sink_type: SinkType::Log,
+                anchor: SourceAnchor::from_line(PathBuf::from("/repo/a/src/lib.ts"), 5),
+                text: "console.log('a')".into(),
+                contains_pii: false,
+            }],
+            imports: vec![],
+            symbols: vec![],
+            references: vec![],
+            data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 100,
+            content_hash: None,
+        };
+        let ext_b = FileExtraction {
+            file: PathBuf::from("/repo/b/src/lib.ts"),
+            language: SupportedLanguage::Python,
+            interfaces: vec![
+                Interface {
+                    method: HttpMethod::Post,
+                    path: "/b1".into(),
+                    auth: None,
+                    anchor: SourceAnchor::from_line(PathBuf::from("/repo/b/src/lib.ts"), 1),
+                },
+                Interface {
+                    method: HttpMethod::Get,
+                    path: "/b2".into(),
+                    auth: None,
+                    anchor: SourceAnchor::from_line(PathBuf::from("/repo/b/src/lib.ts"), 10),
+                },
+            ],
+            dependencies: vec![],
+            sinks: vec![],
+            imports: vec![],
+            symbols: vec![],
+            references: vec![],
+            data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 200,
+            content_hash: None,
+        };
+
+        builder.set_file_in_component(&ext_a, "a");
+        builder.set_file_in_component(&ext_b, "b");
+
+        let model = builder.build();
+
+        assert_eq!(model.stats.files_analyzed, 2);
+        assert_eq!(model.stats.total_interfaces, 3);
+        assert_eq!(model.stats.total_sinks, 1);
+        assert_eq!(model.stats.total_estimated_tokens, 300);
+    }
+
+    // --- is_test_reference tagging tests ---
+
+    /// Helper: build a FileExtraction with a specific file role and references.
+    fn extraction_with_refs(
+        file: &str,
+        role: FileRole,
+        refs: Vec<Reference>,
+        symbols: Vec<Symbol>,
+    ) -> FileExtraction {
+        FileExtraction {
+            file: PathBuf::from(file),
+            language: SupportedLanguage::TypeScript,
+            interfaces: vec![],
+            dependencies: vec![],
+            sinks: vec![],
+            imports: vec![],
+            symbols,
+            references: refs,
+            data_models: vec![],
+            file_role: role,
+            estimated_tokens: 0,
+            content_hash: None,
+        }
+    }
+
+    #[test]
+    fn test_reference_tagged_when_source_is_test_and_target_is_impl() {
+        let mut builder = CodeModelBuilder::new("proj");
+
+        // Production file with a symbol
+        let prod = extraction_with_refs(
+            "src/service.ts",
+            FileRole::Implementation,
+            vec![],
+            vec![Symbol {
+                name: "UserService".into(),
+                kind: SymbolKind::Class,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/service.ts"), 1),
+                doc: None,
+                signature: None,
+                visibility: None,
+                parent: None,
+            }],
+        );
+
+        // Test file calling the production symbol
+        let test = extraction_with_refs(
+            "tests/service.test.ts",
+            FileRole::Test,
+            vec![Reference {
+                source_symbol: "testService".into(),
+                source_file: PathBuf::from("tests/service.test.ts"),
+                source_line: 5,
+                target_symbol: "UserService".into(),
+                target_file: Some(PathBuf::from("src/service.ts")),
+                target_line: Some(1),
+                reference_kind: ReferenceKind::Call,
+                confidence: 0.90,
+                resolution_method: ResolutionMethod::ImportBased,
+                is_test_reference: false, // will be tagged by builder
+            }],
+            vec![],
+        );
+
+        builder.set_file(&prod);
+        builder.set_file(&test);
+        let model = builder.build();
+
+        let test_refs: Vec<&Reference> = model.components[0]
+            .references
+            .iter()
+            .filter(|r| r.source_file == PathBuf::from("tests/service.test.ts"))
+            .collect();
+
+        assert!(
+            !test_refs.is_empty(),
+            "should have references from test file"
+        );
+        for r in &test_refs {
+            if r.target_file == Some(PathBuf::from("src/service.ts")) {
+                assert!(
+                    r.is_test_reference,
+                    "test→production reference should be tagged"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_to_test_not_tagged_as_test_reference() {
+        let mut builder = CodeModelBuilder::new("proj");
+
+        // Two test files referencing each other
+        let test1 = extraction_with_refs(
+            "tests/a.test.ts",
+            FileRole::Test,
+            vec![Reference {
+                source_symbol: "testA".into(),
+                source_file: PathBuf::from("tests/a.test.ts"),
+                source_line: 3,
+                target_symbol: "helperB".into(),
+                target_file: Some(PathBuf::from("tests/b.test.ts")),
+                target_line: Some(1),
+                reference_kind: ReferenceKind::Call,
+                confidence: 0.80,
+                resolution_method: ResolutionMethod::GlobalUnique,
+                is_test_reference: false,
+            }],
+            vec![],
+        );
+        let test2 = extraction_with_refs(
+            "tests/b.test.ts",
+            FileRole::Test,
+            vec![],
+            vec![Symbol {
+                name: "helperB".into(),
+                kind: SymbolKind::Function,
+                anchor: SourceAnchor::from_line(PathBuf::from("tests/b.test.ts"), 1),
+                doc: None,
+                signature: None,
+                visibility: None,
+                parent: None,
+            }],
+        );
+
+        builder.set_file(&test1);
+        builder.set_file(&test2);
+        let model = builder.build();
+
+        let test_to_test: Vec<&Reference> = model.components[0]
+            .references
+            .iter()
+            .filter(|r| {
+                r.source_file == PathBuf::from("tests/a.test.ts")
+                    && r.target_file == Some(PathBuf::from("tests/b.test.ts"))
+            })
+            .collect();
+
+        for r in &test_to_test {
+            assert!(
+                !r.is_test_reference,
+                "test→test reference should NOT be tagged"
+            );
+        }
+    }
+
+    #[test]
+    fn impl_to_impl_not_tagged_as_test_reference() {
+        let mut builder = CodeModelBuilder::new("proj");
+
+        let prod1 = extraction_with_refs(
+            "src/a.ts",
+            FileRole::Implementation,
+            vec![Reference {
+                source_symbol: "funcA".into(),
+                source_file: PathBuf::from("src/a.ts"),
+                source_line: 5,
+                target_symbol: "funcB".into(),
+                target_file: Some(PathBuf::from("src/b.ts")),
+                target_line: Some(1),
+                reference_kind: ReferenceKind::Call,
+                confidence: 0.95,
+                resolution_method: ResolutionMethod::ImportBased,
+                is_test_reference: false,
+            }],
+            vec![],
+        );
+        let prod2 = extraction_with_refs(
+            "src/b.ts",
+            FileRole::Implementation,
+            vec![],
+            vec![Symbol {
+                name: "funcB".into(),
+                kind: SymbolKind::Function,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/b.ts"), 1),
+                doc: None,
+                signature: None,
+                visibility: None,
+                parent: None,
+            }],
+        );
+
+        builder.set_file(&prod1);
+        builder.set_file(&prod2);
+        let model = builder.build();
+
+        for r in &model.components[0].references {
+            assert!(
+                !r.is_test_reference,
+                "impl→impl reference should NOT be tagged"
+            );
+        }
     }
 }

@@ -1082,6 +1082,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.95,
                         resolution_method: ResolutionMethod::ImportBased,
+                        is_test_reference: false,
                     },
                     Reference {
                         source_symbol: "getUser".into(),
@@ -1093,6 +1094,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.90,
                         resolution_method: ResolutionMethod::SameFile,
+                        is_test_reference: false,
                     },
                     // External call
                     Reference {
@@ -1105,6 +1107,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.0,
                         resolution_method: ResolutionMethod::Unresolved,
+                        is_test_reference: false,
                     },
                     // Type hierarchy: AdminService extends UserService
                     Reference {
@@ -1117,6 +1120,7 @@ mod tests {
                         reference_kind: ReferenceKind::Extends,
                         confidence: 0.80,
                         resolution_method: ResolutionMethod::GlobalUnique,
+                        is_test_reference: false,
                     },
                     // Import
                     Reference {
@@ -1129,6 +1133,7 @@ mod tests {
                         reference_kind: ReferenceKind::Import,
                         confidence: 0.95,
                         resolution_method: ResolutionMethod::ImportBased,
+                        is_test_reference: false,
                     },
                 ],
                 data_models: vec![DataModel {
@@ -1174,7 +1179,9 @@ mod tests {
                 total_modules: 2,
                 resolved_references: 0,
                 avg_resolution_confidence: 0.0,
+                ..Default::default()
             },
+            file_tree: None,
         }
     }
 
@@ -1209,7 +1216,9 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 0,
                 avg_resolution_confidence: 0.0,
+                ..Default::default()
             },
+            file_tree: None,
         };
 
         let kg = KnowledgeGraph::from_code_model(&model);
@@ -1543,6 +1552,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.0,
                         resolution_method: ResolutionMethod::Unresolved,
+                        is_test_reference: false,
                     },
                     Reference {
                         source_symbol: "funcB".into(),
@@ -1554,6 +1564,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.0,
                         resolution_method: ResolutionMethod::Unresolved,
+                        is_test_reference: false,
                     },
                 ],
                 data_models: vec![],
@@ -1571,7 +1582,9 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 0,
                 avg_resolution_confidence: 0.0,
+                ..Default::default()
             },
+            file_tree: None,
         };
 
         let kg = KnowledgeGraph::from_code_model(&model);
@@ -1621,7 +1634,9 @@ mod tests {
                 total_modules: 2,
                 resolved_references: 0,
                 avg_resolution_confidence: 0.0,
+                ..Default::default()
             },
+            file_tree: None,
         };
 
         let kg = KnowledgeGraph::from_code_model(&model);
@@ -1712,6 +1727,7 @@ mod tests {
                     reference_kind: ReferenceKind::Call,
                     confidence: 0.0,
                     resolution_method: ResolutionMethod::Unresolved,
+                    is_test_reference: false,
                 }],
                 data_models: vec![],
                 module_boundaries: vec![],
@@ -1728,7 +1744,9 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 0,
                 avg_resolution_confidence: 0.0,
+                ..Default::default()
             },
+            file_tree: None,
         };
 
         let kg = KnowledgeGraph::from_code_model(&model);
@@ -1836,6 +1854,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.05, // very low — below threshold
                         resolution_method: ResolutionMethod::GlobalAmbiguous,
+                        is_test_reference: false,
                     },
                     Reference {
                         source_symbol: "funcB".into(),
@@ -1847,6 +1866,7 @@ mod tests {
                         reference_kind: ReferenceKind::Call,
                         confidence: 0.90,
                         resolution_method: ResolutionMethod::SameFile,
+                        is_test_reference: false,
                     },
                 ],
                 data_models: vec![],
@@ -1864,7 +1884,9 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 1,
                 avg_resolution_confidence: 0.475,
+                ..Default::default()
             },
+            file_tree: None,
         };
 
         let kg = KnowledgeGraph::from_code_model(&model);

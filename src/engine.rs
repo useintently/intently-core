@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use rayon::prelude::*;
+use sha2::{Digest, Sha256};
 use tracing::{debug, info, info_span, instrument, warn};
 use walkdir::WalkDir;
 
@@ -24,6 +25,7 @@ use crate::model::graph::{GraphStats, KnowledgeGraph};
 use crate::model::graph_analysis::{AnalysisContext, AnalysisPipeline};
 use crate::model::types::{CodeModel, FileExtraction};
 use crate::parser;
+use crate::workspace::{self, WorkspaceLayout};
 
 /// Directories to skip during file discovery.
 const IGNORED_DIRS: &[&str] = &[
@@ -94,16 +96,32 @@ pub struct IntentlyEngine {
     /// Provides O(1) adjacency lookups for callers/callees/impact analysis
     /// and structural analysis (cycle detection).
     knowledge_graph: Option<KnowledgeGraph>,
+    /// Detected workspace layout for monorepo projects.
+    /// When present, files are routed to per-package components during
+    /// extraction, enabling per-package import resolution and module inference.
+    workspace_layout: Option<WorkspaceLayout>,
 }
 
 impl IntentlyEngine {
     /// Create a new engine for the given project root.
+    ///
+    /// Automatically detects workspace layouts (pnpm, npm, Cargo, Go, uv)
+    /// to enable per-package component extraction.
     pub fn new(project_root: PathBuf) -> Self {
         let project_name = project_root
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
+
+        let workspace_layout = workspace::detect_workspace(&project_root);
+        if let Some(ref layout) = workspace_layout {
+            info!(
+                kind = %layout.kind,
+                packages = layout.packages.len(),
+                "detected workspace"
+            );
+        }
 
         let model_builder = CodeModelBuilder::with_root(&project_name, &project_root);
         Self {
@@ -115,6 +133,7 @@ impl IntentlyEngine {
             tree_cache: HashMap::new(),
             model_builder,
             knowledge_graph: None,
+            workspace_layout,
         }
     }
 
@@ -148,6 +167,14 @@ impl IntentlyEngine {
         self.tree_cache.clear();
         self.model_builder = CodeModelBuilder::with_root(&self.project_name, &self.project_root);
 
+        // Configure per-package component roots and workspace layout for monorepos
+        if let Some(ref layout) = self.workspace_layout {
+            for pkg in &layout.packages {
+                self.model_builder.set_component_root(&pkg.name, &pkg.root);
+            }
+            self.model_builder.set_workspace_layout(layout.clone());
+        }
+
         for (chunk_index, chunk) in files.chunks(CHUNK_SIZE).enumerate() {
             info!(
                 chunk_index,
@@ -170,7 +197,7 @@ impl IntentlyEngine {
             // Drain chunk results into caches (sequential)
             for (path, source, extraction, tree) in results {
                 self.source_cache.insert(path.clone(), source);
-                self.model_builder.set_file(&extraction);
+                self.route_extraction_to_component(&extraction);
                 self.extraction_cache.insert(path.clone(), extraction);
                 self.tree_cache.insert(path, tree);
             }
@@ -198,7 +225,7 @@ impl IntentlyEngine {
         match self.parse_and_extract(&abs_path, old_tree.as_ref()) {
             Ok((path, source, extraction, tree)) => {
                 self.source_cache.insert(path.clone(), source);
-                self.model_builder.set_file(&extraction);
+                self.route_extraction_to_component(&extraction);
                 self.extraction_cache.insert(path.clone(), extraction);
                 self.tree_cache.insert(path, tree);
             }
@@ -244,7 +271,7 @@ impl IntentlyEngine {
             match self.parse_and_extract(&abs_path, old_tree.as_ref()) {
                 Ok((p, source, extraction, tree)) => {
                     self.source_cache.insert(p.clone(), source);
-                    self.model_builder.set_file(&extraction);
+                    self.route_extraction_to_component(&extraction);
                     self.extraction_cache.insert(p.clone(), extraction);
                     self.tree_cache.insert(p, tree);
                 }
@@ -317,6 +344,30 @@ impl IntentlyEngine {
     #[doc(hidden)]
     pub fn set_knowledge_graph(&mut self, graph: KnowledgeGraph) {
         self.knowledge_graph = Some(graph);
+    }
+
+    /// Get the detected workspace layout, if any.
+    ///
+    /// Returns `Some` for monorepo projects with a recognized workspace manifest
+    /// (pnpm, npm, Cargo, Go, uv). Returns `None` for single-project repos.
+    pub fn workspace_layout(&self) -> Option<&WorkspaceLayout> {
+        self.workspace_layout.as_ref()
+    }
+
+    /// Route a file extraction to the correct component based on workspace layout.
+    ///
+    /// If a workspace is detected and the file falls within a package root,
+    /// routes to that package's component. Otherwise, routes to the default
+    /// component via `set_file()`.
+    fn route_extraction_to_component(&mut self, extraction: &FileExtraction) {
+        if let Some(ref layout) = self.workspace_layout {
+            if let Some(component_name) = layout.component_for_path(&extraction.file) {
+                self.model_builder
+                    .set_file_in_component(extraction, component_name);
+                return;
+            }
+        }
+        self.model_builder.set_file(extraction);
     }
 
     /// Run the standard graph analysis pipeline on the current knowledge graph.
@@ -393,7 +444,8 @@ impl IntentlyEngine {
 
         let parsed = parser::parse_source(path, &source, language, old_tree)?;
 
-        let extraction = extractors::extract(path, &source, &parsed.tree, language);
+        let mut extraction = extractors::extract(path, &source, &parsed.tree, language);
+        extraction.content_hash = Some(compute_sha256(source.as_bytes()));
 
         Ok((path.to_path_buf(), source, extraction, parsed.tree))
     }
@@ -415,7 +467,8 @@ impl IntentlyEngine {
 
         let parsed = parser::parse_source_cached(path, &source, language, None)?;
 
-        let extraction = extractors::extract(path, &source, &parsed.tree, language);
+        let mut extraction = extractors::extract(path, &source, &parsed.tree, language);
+        extraction.content_hash = Some(compute_sha256(source.as_bytes()));
 
         Ok((path.to_path_buf(), source, extraction, parsed.tree))
     }
@@ -481,6 +534,13 @@ impl IntentlyEngine {
             self.project_root.join(path)
         }
     }
+}
+
+/// Compute SHA-256 hash of file content for cache invalidation.
+fn compute_sha256(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
 }
 
 fn is_ignored_dir(entry: &walkdir::DirEntry) -> bool {
@@ -714,5 +774,84 @@ app.get('/health', (req, res) => res.json({ ok: true }));
             .next()
             .unwrap()
             .contains("app.get"));
+    }
+
+    #[test]
+    fn extractions_have_content_hash() {
+        let dir = create_project(&[(
+            "src/app.ts",
+            r#"app.get('/test', (req, res) => res.json({}));"#,
+        )]);
+
+        let mut engine = IntentlyEngine::new(dir.path().to_path_buf());
+        engine.full_analysis().unwrap();
+
+        for extraction in engine.extractions().values() {
+            assert!(
+                extraction.content_hash.is_some(),
+                "all extractions should have a content hash after analysis"
+            );
+        }
+    }
+
+    #[test]
+    fn content_hash_changes_when_file_changes() {
+        let dir = create_project(&[(
+            "src/app.ts",
+            r#"app.get('/v1', (req, res) => res.json({}));"#,
+        )]);
+
+        let mut engine = IntentlyEngine::new(dir.path().to_path_buf());
+        engine.full_analysis().unwrap();
+
+        let hash_before = engine.extractions().values().next().unwrap().content_hash;
+
+        // Modify file content
+        std::fs::write(
+            dir.path().join("src/app.ts"),
+            r#"app.get('/v2', (req, res) => res.json({}));"#,
+        )
+        .unwrap();
+
+        engine.on_file_changed(Path::new("src/app.ts")).unwrap();
+
+        let hash_after = engine.extractions().values().next().unwrap().content_hash;
+
+        assert_ne!(
+            hash_before, hash_after,
+            "content hash should change when file is modified"
+        );
+    }
+
+    #[test]
+    fn file_role_and_tokens_populated_after_analysis() {
+        let dir = create_project(&[(
+            "src/app.ts",
+            r#"app.get('/test', (req, res) => res.json({}));"#,
+        )]);
+
+        let mut engine = IntentlyEngine::new(dir.path().to_path_buf());
+        let result = engine.full_analysis().unwrap();
+
+        for extraction in engine.extractions().values() {
+            assert_eq!(
+                extraction.file_role,
+                crate::model::types::FileRole::Implementation,
+                "src/*.ts files should be classified as Implementation"
+            );
+            assert!(
+                extraction.estimated_tokens > 0,
+                "non-empty files should have estimated tokens > 0"
+            );
+        }
+
+        assert!(
+            result.model.stats.total_estimated_tokens > 0,
+            "total estimated tokens should be aggregated in stats"
+        );
+        assert!(
+            !result.model.stats.file_roles.is_empty(),
+            "file roles breakdown should be populated in stats"
+        );
     }
 }

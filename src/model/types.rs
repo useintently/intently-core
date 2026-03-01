@@ -3,7 +3,8 @@
 //! These types model a codebase at a semantic level — services, APIs,
 //! dependencies, and observable sinks — rather than at the file/line level.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +90,292 @@ impl SourceAnchor {
     }
 }
 
+// ---------------------------------------------------------------------------
+// File role classification
+// ---------------------------------------------------------------------------
+
+/// Classification of a file's role in the project.
+///
+/// Used by downstream consumers for scoring, filtering, and token budgeting.
+/// Roles are assigned via path/filename heuristics during file discovery.
+///
+/// Priority order: Generated > Test > Documentation > Build > Config > Implementation > Other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileRole {
+    /// Source code implementing business logic or application features.
+    Implementation,
+    /// Test files: unit tests, integration tests, spec files.
+    Test,
+    /// Configuration files: YAML, TOML, JSON, .env, editor configs.
+    Config,
+    /// Documentation: Markdown, README, docs directories.
+    Documentation,
+    /// Generated or vendored code: protobuf output, node_modules, vendor.
+    Generated,
+    /// Build system files: Cargo.toml, Makefile, Dockerfile, lock files.
+    Build,
+    /// Files that don't match any other role.
+    Other,
+}
+
+impl FileRole {
+    /// Machine-readable short label for this role.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Implementation => "impl",
+            Self::Test => "test",
+            Self::Config => "config",
+            Self::Documentation => "docs",
+            Self::Generated => "generated",
+            Self::Build => "build",
+            Self::Other => "other",
+        }
+    }
+
+    /// Classify a file's role based on its path using heuristic rules.
+    ///
+    /// The priority waterfall checks directory components and filename patterns
+    /// to assign the most specific role. Generated/vendored files take highest
+    /// priority to ensure they are never mis-classified as implementation.
+    pub fn from_path(path: &Path) -> Self {
+        let path_str = path.to_string_lossy();
+        let file_name = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // Generated directories (highest priority — never mis-classify as impl)
+        if Self::path_contains_component(&path_str, "vendor")
+            || Self::path_contains_component(&path_str, "node_modules")
+            || Self::path_contains_component(&path_str, "generated")
+        {
+            return Self::Generated;
+        }
+
+        // Generated filename patterns
+        if Self::is_generated_filename(&file_name) {
+            return Self::Generated;
+        }
+
+        // Test directories
+        if Self::path_contains_component(&path_str, "tests")
+            || Self::path_contains_component(&path_str, "__tests__")
+            || Self::path_contains_component(&path_str, "spec")
+            || Self::path_contains_component(&path_str, "test")
+        {
+            return Self::Test;
+        }
+
+        // Test filename patterns
+        if Self::is_test_filename(&file_name) {
+            return Self::Test;
+        }
+
+        // Documentation directory
+        if Self::path_contains_component(&path_str, "docs") {
+            return Self::Documentation;
+        }
+
+        // Build files (exact filenames)
+        if Self::is_build_filename(&file_name) {
+            return Self::Build;
+        }
+
+        // Config files
+        if Self::is_config_extension(ext) || Self::is_config_filename(&file_name) {
+            return Self::Config;
+        }
+
+        // Documentation by extension
+        if matches!(ext, "md" | "mdx" | "rst" | "adoc") {
+            return Self::Documentation;
+        }
+
+        // Implementation: known programming language extensions
+        if Self::is_programming_extension(ext) {
+            return Self::Implementation;
+        }
+
+        Self::Other
+    }
+
+    /// Check if a path contains a specific directory component.
+    ///
+    /// Splits on `/` and `\` and compares exact component names to avoid
+    /// false positives (e.g., "attestation" matching "test").
+    fn path_contains_component(path_str: &str, component: &str) -> bool {
+        path_str.split(['/', '\\']).any(|c| c == component)
+    }
+
+    fn is_test_filename(file_name: &str) -> bool {
+        let lower = file_name.to_lowercase();
+        lower.ends_with("_test.go")
+            || lower.ends_with("_test.rs")
+            || lower.ends_with("_spec.rs")
+            || lower.ends_with("_spec.rb")
+            || lower.ends_with("_test.py")
+            || lower.ends_with("test.java")
+            || lower.ends_with("test.cs")
+            || lower.ends_with("test.kt")
+            || lower.ends_with(".test.js")
+            || lower.ends_with(".test.ts")
+            || lower.ends_with(".test.tsx")
+            || lower.ends_with(".test.jsx")
+            || lower.ends_with(".spec.js")
+            || lower.ends_with(".spec.ts")
+            || lower.ends_with(".spec.tsx")
+            || lower.ends_with(".spec.jsx")
+            || (lower.starts_with("test_") && (lower.ends_with(".py") || lower.ends_with(".rb")))
+    }
+
+    fn is_generated_filename(file_name: &str) -> bool {
+        let lower = file_name.to_lowercase();
+        lower.contains(".generated.")
+            || lower.ends_with(".pb.go")
+            || lower.ends_with(".g.dart")
+            || lower.ends_with(".g.cs")
+    }
+
+    fn is_build_filename(file_name: &str) -> bool {
+        matches!(
+            file_name,
+            "Makefile"
+                | "makefile"
+                | "GNUmakefile"
+                | "Cargo.toml"
+                | "package.json"
+                | "build.rs"
+                | "build.gradle"
+                | "build.gradle.kts"
+                | "pom.xml"
+                | "CMakeLists.txt"
+                | "Dockerfile"
+                | "docker-compose.yml"
+                | "docker-compose.yaml"
+                | "Rakefile"
+                | "Gemfile"
+                | "Justfile"
+                | "justfile"
+                | "go.mod"
+                | "go.sum"
+                | "setup.py"
+                | "setup.cfg"
+                | "pyproject.toml"
+                | "Pipfile"
+                | "Cargo.lock"
+                | "package-lock.json"
+                | "yarn.lock"
+                | "pnpm-lock.yaml"
+                | "flake.nix"
+                | "composer.json"
+        )
+    }
+
+    fn is_config_extension(ext: &str) -> bool {
+        matches!(ext, "yaml" | "yml" | "ini" | "cfg" | "env")
+    }
+
+    fn is_config_filename(file_name: &str) -> bool {
+        let lower = file_name.to_lowercase();
+        lower.starts_with(".env")
+            || matches!(
+                file_name,
+                ".gitignore"
+                    | ".gitattributes"
+                    | ".editorconfig"
+                    | ".prettierrc"
+                    | ".eslintrc"
+                    | ".babelrc"
+                    | "tsconfig.json"
+                    | "rustfmt.toml"
+                    | "clippy.toml"
+                    | ".rustfmt.toml"
+                    | ".clippy.toml"
+                    | "deny.toml"
+            )
+    }
+
+    fn is_programming_extension(ext: &str) -> bool {
+        matches!(
+            ext,
+            "rs" | "go"
+                | "py"
+                | "pyi"
+                | "js"
+                | "mjs"
+                | "cjs"
+                | "ts"
+                | "tsx"
+                | "mts"
+                | "cts"
+                | "jsx"
+                | "java"
+                | "kt"
+                | "kts"
+                | "rb"
+                | "c"
+                | "h"
+                | "cpp"
+                | "cc"
+                | "cxx"
+                | "hpp"
+                | "cs"
+                | "swift"
+                | "scala"
+                | "sc"
+                | "php"
+                | "sh"
+                | "bash"
+                | "zsh"
+                | "lua"
+                | "ex"
+                | "exs"
+                | "hs"
+                | "r"
+                | "html"
+                | "htm"
+                | "css"
+                | "scss"
+                | "sass"
+                | "less"
+        )
+    }
+}
+
+impl std::fmt::Display for FileRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Token budget
+// ---------------------------------------------------------------------------
+
+/// Token budget configuration for downstream consumers.
+///
+/// Enforces a byte or token limit on a set of scored results.
+/// Uses the `bytes / 4` heuristic for token estimation (same approach
+/// used by most LLM tooling).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenBudget {
+    /// Maximum total bytes across all selected files.
+    pub max_bytes: Option<u64>,
+    /// Maximum total estimated tokens across all selected files.
+    pub max_tokens: Option<u64>,
+}
+
+/// Estimate token count from byte size using the `bytes / 4` heuristic.
+///
+/// This is the standard rough approximation used by LLM tooling.
+/// Actual token counts vary by tokenizer, but this is sufficient
+/// for budget enforcement and cost estimation.
+pub fn estimate_tokens(byte_size: u64) -> u64 {
+    byte_size / 4
+}
+
 /// The CodeModel: a semantic snapshot of the entire codebase.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CodeModel {
@@ -96,6 +383,60 @@ pub struct CodeModel {
     pub project_name: String,
     pub components: Vec<Component>,
     pub stats: CodeModelStats,
+    /// Hierarchical directory structure with role classification and statistics.
+    /// Built during `CodeModelBuilder::build()` from analyzed file metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_tree: Option<super::file_tree::FileTree>,
+}
+
+impl CodeModel {
+    /// Return a filtered copy containing only references at or above `min_confidence`.
+    ///
+    /// Filters:
+    /// - `Component.references` — removes entries below threshold
+    /// - `FileTree.directory_dependencies` — removes entries with `avg_confidence < min_confidence`
+    /// - `CodeModelStats` — recalculates `total_references`, `resolved_references`,
+    ///   `avg_resolution_confidence`
+    pub fn filtered(&self, min_confidence: f64) -> Self {
+        let mut model = self.clone();
+
+        for component in &mut model.components {
+            component
+                .references
+                .retain(|r| r.confidence >= min_confidence);
+        }
+
+        // Recalculate reference stats
+        let total_refs: usize = model.components.iter().map(|c| c.references.len()).sum();
+        let resolved: usize = model
+            .components
+            .iter()
+            .flat_map(|c| c.references.iter())
+            .filter(|r| r.confidence > 0.0)
+            .count();
+        let confidence_sum: f64 = model
+            .components
+            .iter()
+            .flat_map(|c| c.references.iter())
+            .map(|r| r.confidence)
+            .sum();
+
+        model.stats.total_references = total_refs;
+        model.stats.resolved_references = resolved;
+        model.stats.avg_resolution_confidence = if total_refs == 0 {
+            0.0
+        } else {
+            confidence_sum / total_refs as f64
+        };
+
+        // Filter file tree directory dependencies
+        if let Some(ref mut tree) = model.file_tree {
+            tree.directory_dependencies
+                .retain(|d| d.avg_confidence >= min_confidence);
+        }
+
+        model
+    }
 }
 
 /// A logical component (service, library, module) in the system.
@@ -290,6 +631,13 @@ pub struct Reference {
     /// How this reference's target was resolved.
     #[serde(default)]
     pub resolution_method: ResolutionMethod,
+    /// Whether this reference crosses a test→production boundary.
+    ///
+    /// `true` when the source file has `FileRole::Test` and the target
+    /// file does NOT have `FileRole::Test`. Enables downstream consumers
+    /// to separate test coupling from production architecture.
+    #[serde(default)]
+    pub is_test_reference: bool,
 }
 
 /// Classification of a reference relationship.
@@ -394,6 +742,15 @@ pub struct CodeModelStats {
     /// Average confidence across all references (0.0 if no references).
     #[serde(default)]
     pub avg_resolution_confidence: f64,
+    /// Breakdown of files by role (impl, test, config, etc.).
+    #[serde(default)]
+    pub file_roles: HashMap<String, usize>,
+    /// Total estimated tokens across all analyzed files (bytes / 4 heuristic).
+    #[serde(default)]
+    pub total_estimated_tokens: u64,
+    /// Total number of directories in the file tree.
+    #[serde(default)]
+    pub total_directories: usize,
 }
 
 /// Extraction results from a single source file, prior to aggregation.
@@ -408,6 +765,20 @@ pub struct FileExtraction {
     pub symbols: Vec<Symbol>,
     pub references: Vec<Reference>,
     pub data_models: Vec<DataModel>,
+    /// Classification of this file's role in the project.
+    #[serde(default = "default_file_role")]
+    pub file_role: FileRole,
+    /// Estimated token count (source bytes / 4).
+    #[serde(default)]
+    pub estimated_tokens: u64,
+    /// SHA-256 content hash for cache invalidation.
+    /// `None` for extractions created before hashing was added.
+    #[serde(default)]
+    pub content_hash: Option<[u8; 32]>,
+}
+
+fn default_file_role() -> FileRole {
+    FileRole::Implementation
 }
 
 /// An import/require statement found in a source file.
@@ -456,7 +827,11 @@ mod tests {
                 total_modules: 0,
                 resolved_references: 0,
                 avg_resolution_confidence: 0.0,
+                file_roles: HashMap::new(),
+                total_estimated_tokens: 0,
+                total_directories: 0,
             },
+            file_tree: None,
         };
 
         let json = serde_json::to_string(&model).unwrap();
@@ -494,6 +869,9 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 250,
+            content_hash: None,
         };
 
         let json = serde_json::to_string(&extraction).unwrap();
@@ -652,6 +1030,7 @@ mod tests {
             reference_kind: ReferenceKind::Call,
             confidence: 0.0,
             resolution_method: ResolutionMethod::Unresolved,
+            is_test_reference: false,
         };
 
         let json = serde_json::to_string(&reference).unwrap();
@@ -688,6 +1067,7 @@ mod tests {
             reference_kind: ReferenceKind::Call,
             confidence: 0.0,
             resolution_method: ResolutionMethod::Unresolved,
+            is_test_reference: false,
         };
 
         let json = serde_json::to_string(&reference).unwrap();
@@ -773,5 +1153,371 @@ mod tests {
         let json = serde_json::to_string(&field).unwrap();
         let deserialized: FieldInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(field, deserialized);
+    }
+
+    // --- FileRole classification tests ---
+
+    #[test]
+    fn file_role_classifies_implementation() {
+        assert_eq!(
+            FileRole::from_path(Path::new("src/engine.rs")),
+            FileRole::Implementation
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("lib/server.ts")),
+            FileRole::Implementation
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("app/models/user.py")),
+            FileRole::Implementation
+        );
+    }
+
+    #[test]
+    fn file_role_classifies_tests_by_directory() {
+        assert_eq!(
+            FileRole::from_path(Path::new("tests/integration.rs")),
+            FileRole::Test
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("src/__tests__/app.test.ts")),
+            FileRole::Test
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("spec/models/user_spec.rb")),
+            FileRole::Test
+        );
+    }
+
+    #[test]
+    fn file_role_classifies_tests_by_filename() {
+        assert_eq!(
+            FileRole::from_path(Path::new("src/app.test.ts")),
+            FileRole::Test
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("src/app.spec.js")),
+            FileRole::Test
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("main_test.go")),
+            FileRole::Test
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("test_models.py")),
+            FileRole::Test
+        );
+    }
+
+    #[test]
+    fn file_role_classifies_generated() {
+        assert_eq!(
+            FileRole::from_path(Path::new("vendor/lib.rs")),
+            FileRole::Generated
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("node_modules/express/index.js")),
+            FileRole::Generated
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("api.generated.ts")),
+            FileRole::Generated
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("service.pb.go")),
+            FileRole::Generated
+        );
+    }
+
+    #[test]
+    fn file_role_classifies_build() {
+        assert_eq!(
+            FileRole::from_path(Path::new("Cargo.toml")),
+            FileRole::Build
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("package.json")),
+            FileRole::Build
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("Dockerfile")),
+            FileRole::Build
+        );
+        assert_eq!(FileRole::from_path(Path::new("Makefile")), FileRole::Build);
+    }
+
+    #[test]
+    fn file_role_classifies_config() {
+        assert_eq!(
+            FileRole::from_path(Path::new("config.yaml")),
+            FileRole::Config
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new(".env.production")),
+            FileRole::Config
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new(".gitignore")),
+            FileRole::Config
+        );
+    }
+
+    #[test]
+    fn file_role_classifies_documentation() {
+        assert_eq!(
+            FileRole::from_path(Path::new("docs/architecture.md")),
+            FileRole::Documentation
+        );
+        assert_eq!(
+            FileRole::from_path(Path::new("README.md")),
+            FileRole::Documentation
+        );
+    }
+
+    #[test]
+    fn file_role_generated_takes_priority_over_test() {
+        // A test file inside vendor/ should be classified as Generated, not Test
+        assert_eq!(
+            FileRole::from_path(Path::new("vendor/pkg/handler_test.go")),
+            FileRole::Generated
+        );
+    }
+
+    #[test]
+    fn file_role_display_matches_as_str() {
+        for role in [
+            FileRole::Implementation,
+            FileRole::Test,
+            FileRole::Config,
+            FileRole::Documentation,
+            FileRole::Generated,
+            FileRole::Build,
+            FileRole::Other,
+        ] {
+            assert_eq!(role.to_string(), role.as_str());
+        }
+    }
+
+    #[test]
+    fn file_role_serialization_round_trip() {
+        for role in [
+            FileRole::Implementation,
+            FileRole::Test,
+            FileRole::Config,
+            FileRole::Documentation,
+            FileRole::Generated,
+            FileRole::Build,
+            FileRole::Other,
+        ] {
+            let json = serde_json::to_string(&role).unwrap();
+            let deserialized: FileRole = serde_json::from_str(&json).unwrap();
+            assert_eq!(role, deserialized);
+        }
+    }
+
+    // --- Token estimation tests ---
+
+    #[test]
+    fn estimate_tokens_divides_by_four() {
+        assert_eq!(estimate_tokens(400), 100);
+        assert_eq!(estimate_tokens(0), 0);
+        assert_eq!(estimate_tokens(3), 0); // integer division rounds down
+        assert_eq!(estimate_tokens(1000), 250);
+    }
+
+    // --- CodeModel::filtered() tests ---
+
+    /// Helper: build a minimal CodeModel with the given references.
+    fn model_with_refs(refs: Vec<Reference>) -> CodeModel {
+        let total = refs.len();
+        let resolved = refs.iter().filter(|r| r.confidence > 0.0).count();
+        let conf_sum: f64 = refs.iter().map(|r| r.confidence).sum();
+        let avg = if total == 0 {
+            0.0
+        } else {
+            conf_sum / total as f64
+        };
+
+        CodeModel {
+            version: "1.0".into(),
+            project_name: "test".into(),
+            components: vec![Component {
+                name: "default".into(),
+                language: SupportedLanguage::TypeScript,
+                interfaces: vec![],
+                dependencies: vec![],
+                sinks: vec![],
+                symbols: vec![],
+                imports: vec![],
+                references: refs,
+                data_models: vec![],
+                module_boundaries: vec![],
+            }],
+            stats: CodeModelStats {
+                total_references: total,
+                resolved_references: resolved,
+                avg_resolution_confidence: avg,
+                ..Default::default()
+            },
+            file_tree: None,
+        }
+    }
+
+    fn test_ref(confidence: f64) -> Reference {
+        Reference {
+            source_symbol: "caller".into(),
+            source_file: PathBuf::from("src/a.ts"),
+            source_line: 1,
+            target_symbol: "callee".into(),
+            target_file: Some(PathBuf::from("src/b.ts")),
+            target_line: Some(1),
+            reference_kind: ReferenceKind::Call,
+            confidence,
+            resolution_method: if confidence > 0.0 {
+                ResolutionMethod::ImportBased
+            } else {
+                ResolutionMethod::Unresolved
+            },
+            is_test_reference: false,
+        }
+    }
+
+    #[test]
+    fn filtered_removes_low_confidence_references() {
+        let model = model_with_refs(vec![test_ref(0.95), test_ref(0.40), test_ref(0.0)]);
+
+        let filtered = model.filtered(0.5);
+
+        assert_eq!(
+            filtered.components[0].references.len(),
+            1,
+            "only the 0.95 ref should survive a 0.5 threshold"
+        );
+        assert!((filtered.components[0].references[0].confidence - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn filtered_preserves_high_confidence_references() {
+        let model = model_with_refs(vec![test_ref(0.95), test_ref(0.80), test_ref(0.50)]);
+
+        let filtered = model.filtered(0.5);
+
+        assert_eq!(
+            filtered.components[0].references.len(),
+            3,
+            "all refs at or above 0.5 should be kept"
+        );
+    }
+
+    #[test]
+    fn filtered_recalculates_stats() {
+        let model = model_with_refs(vec![test_ref(0.95), test_ref(0.40), test_ref(0.0)]);
+
+        let filtered = model.filtered(0.5);
+
+        assert_eq!(filtered.stats.total_references, 1);
+        assert_eq!(filtered.stats.resolved_references, 1);
+        assert!((filtered.stats.avg_resolution_confidence - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn filtered_removes_low_confidence_directory_deps() {
+        use crate::model::file_tree::{
+            DirectoryDependency, DirectoryNode, DirectoryRole, DirectoryStats, FileTree,
+        };
+
+        let mut model = model_with_refs(vec![test_ref(0.90)]);
+        model.file_tree = Some(FileTree {
+            root: DirectoryNode {
+                name: "".into(),
+                path: PathBuf::new(),
+                files: vec![],
+                subdirectories: vec![],
+                role: DirectoryRole::Source,
+                stats: DirectoryStats {
+                    direct_file_count: 0,
+                    total_file_count: 0,
+                    total_estimated_tokens: 0,
+                    languages: vec![],
+                    depth: 0,
+                },
+                component_name: None,
+            },
+            directory_dependencies: vec![
+                DirectoryDependency {
+                    source_dir: PathBuf::from("src"),
+                    target_dir: PathBuf::from("lib"),
+                    reference_count: 3,
+                    avg_confidence: 0.90,
+                    max_confidence: 0.95,
+                },
+                DirectoryDependency {
+                    source_dir: PathBuf::from("src"),
+                    target_dir: PathBuf::from("vendor"),
+                    reference_count: 1,
+                    avg_confidence: 0.30,
+                    max_confidence: 0.30,
+                },
+            ],
+        });
+
+        let filtered = model.filtered(0.5);
+
+        let tree = filtered.file_tree.as_ref().unwrap();
+        assert_eq!(
+            tree.directory_dependencies.len(),
+            1,
+            "only the src→lib dep with avg_confidence 0.90 should survive"
+        );
+        assert_eq!(
+            tree.directory_dependencies[0].target_dir,
+            PathBuf::from("lib")
+        );
+    }
+
+    #[test]
+    fn filtered_zero_threshold_keeps_all() {
+        let model = model_with_refs(vec![test_ref(0.95), test_ref(0.40), test_ref(0.0)]);
+
+        let filtered = model.filtered(0.0);
+
+        assert_eq!(
+            filtered.components[0].references.len(),
+            3,
+            "threshold 0.0 should keep everything"
+        );
+    }
+
+    #[test]
+    fn is_test_reference_preserved_in_serde_round_trip() {
+        let mut reference = test_ref(0.90);
+        reference.is_test_reference = true;
+
+        let json = serde_json::to_string(&reference).unwrap();
+        assert!(json.contains("\"is_test_reference\":true"));
+        let deserialized: Reference = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.is_test_reference);
+    }
+
+    #[test]
+    fn is_test_reference_defaults_to_false_on_deserialize() {
+        // Simulate JSON from before the field existed
+        let json = r#"{
+            "source_symbol":"f",
+            "source_file":"a.ts",
+            "source_line":1,
+            "target_symbol":"g",
+            "target_file":null,
+            "target_line":null,
+            "reference_kind":"call",
+            "confidence":0.0,
+            "resolution_method":"unresolved"
+        }"#;
+
+        let reference: Reference = serde_json::from_str(json).unwrap();
+        assert!(
+            !reference.is_test_reference,
+            "missing field should default to false"
+        );
     }
 }

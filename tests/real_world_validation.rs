@@ -23,7 +23,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use intently_core::{ExtractionResult, IntentlyEngine};
+use intently_core::parser::SupportedLanguage;
+use intently_core::search::{SearchPattern, StructuralSearch};
+use intently_core::{ExtractionResult, IntentlyEngine, WorkspaceKind};
 use tempfile::TempDir;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -91,6 +93,30 @@ fn analyze_repo(path: &Path, max_duration_secs: u64) -> ExtractionResult {
     result
 }
 
+/// Run full analysis and return both the engine and the result.
+///
+/// Unlike `analyze_repo`, this preserves the engine for downstream operations
+/// (incremental updates, workspace layout, extractions, sources).
+fn analyze_repo_with_engine(
+    path: &Path,
+    max_duration_secs: u64,
+) -> (IntentlyEngine, ExtractionResult) {
+    let start = Instant::now();
+    let mut engine = IntentlyEngine::new(path.to_path_buf());
+    let result = engine
+        .full_analysis()
+        .expect("full_analysis() should not error on real-world repo");
+
+    let elapsed = start.elapsed().as_secs();
+    assert!(
+        elapsed <= max_duration_secs,
+        "analysis took {}s, exceeding {max_duration_secs}s timeout",
+        elapsed
+    );
+
+    (engine, result)
+}
+
 // ─────────────────────────────────────────────────────────────────
 //  Assertion Helpers
 // ─────────────────────────────────────────────────────────────────
@@ -125,9 +151,11 @@ fn assert_has_symbols(result: &ExtractionResult, name: &str, min: usize) {
 
 /// Assert at least one symbol has a signature (enriched extraction).
 fn assert_has_enriched_symbols(result: &ExtractionResult, name: &str) {
-    let has_sig = result.model.components[0]
-        .symbols
+    let has_sig = result
+        .model
+        .components
         .iter()
+        .flat_map(|c| &c.symbols)
         .any(|s| s.signature.is_some());
     assert!(
         has_sig,
@@ -153,28 +181,191 @@ fn assert_has_imports(result: &ExtractionResult, name: &str, min: usize) {
     );
 }
 
-/// Print a one-line diagnostic report for a project.
-fn print_report(result: &ExtractionResult, name: &str) {
-    let comp = &result.model.components[0];
-    let authed = comp.interfaces.iter().filter(|r| r.auth.is_some()).count();
-    let pii_sinks = comp.sinks.iter().filter(|s| s.contains_pii).count();
-    let enriched = comp
-        .symbols
+/// Assert the repo produces at least `min` data models.
+fn assert_has_data_models(result: &ExtractionResult, name: &str, min: usize) {
+    let count = result.model.stats.total_data_models;
+    assert!(
+        count >= min,
+        "[{name}] expected >= {min} data_models, got {count}"
+    );
+}
+
+/// Assert the repo produces at least `min` references.
+fn assert_has_references(result: &ExtractionResult, name: &str, min: usize) {
+    let count = result.model.stats.total_references;
+    assert!(
+        count >= min,
+        "[{name}] expected >= {min} references, got {count}"
+    );
+}
+
+/// Assert at least `min` references are resolved (confidence > 0).
+fn assert_has_resolved_references(result: &ExtractionResult, name: &str, min: usize) {
+    let resolved = result
+        .model
+        .components
         .iter()
+        .flat_map(|c| &c.references)
+        .filter(|r| r.confidence > 0.0)
+        .count();
+    assert!(
+        resolved >= min,
+        "[{name}] expected >= {min} resolved references (confidence > 0), got {resolved}"
+    );
+}
+
+/// Assert module boundaries are inferred.
+fn assert_has_module_boundaries(result: &ExtractionResult, name: &str, min: usize) {
+    let count = result.model.stats.total_modules;
+    assert!(
+        count >= min,
+        "[{name}] expected >= {min} module boundaries, got {count}"
+    );
+}
+
+/// Assert graph stats are present and non-trivial.
+fn assert_has_graph_stats(result: &ExtractionResult, name: &str) {
+    let stats = result
+        .graph_stats
+        .as_ref()
+        .unwrap_or_else(|| panic!("[{name}] expected graph_stats to be Some"));
+    assert!(stats.total_nodes > 0, "[{name}] expected graph nodes > 0");
+    assert!(stats.total_edges > 0, "[{name}] expected graph edges > 0");
+}
+
+/// Assert SourceAnchors are valid (line > 0, non-empty file) on routes.
+fn assert_anchors_valid(result: &ExtractionResult, name: &str) {
+    for comp in &result.model.components {
+        for route in &comp.interfaces {
+            assert!(
+                route.anchor.line > 0,
+                "[{name}][{}] route anchor should have line > 0",
+                comp.name
+            );
+        }
+        for symbol in &comp.symbols {
+            assert!(
+                symbol.anchor.line > 0,
+                "[{name}][{}] symbol '{}' anchor should have line > 0",
+                comp.name,
+                symbol.name
+            );
+        }
+    }
+}
+
+/// Assert CodeModelStats fields that were previously unchecked.
+fn assert_stats_populated(result: &ExtractionResult, name: &str) {
+    let stats = &result.model.stats;
+    assert!(
+        stats.total_estimated_tokens > 0,
+        "[{name}] expected total_estimated_tokens > 0"
+    );
+    assert!(
+        !stats.file_roles.is_empty(),
+        "[{name}] expected file_roles to be non-empty"
+    );
+    // Guard confidence checks on resolved_references, not total_references:
+    // some module systems (CommonJS) produce references with confidence = 0
+    if stats.resolved_references > 0 {
+        assert!(
+            stats.avg_resolution_confidence > 0.0,
+            "[{name}] expected avg_resolution_confidence > 0.0 when resolved_references={} > 0",
+            stats.resolved_references
+        );
+        assert!(
+            stats.avg_resolution_confidence <= 1.0,
+            "[{name}] expected avg_resolution_confidence <= 1.0, got {}",
+            stats.avg_resolution_confidence
+        );
+    }
+}
+
+/// Assert all FileExtractions have a content hash set.
+fn assert_content_hashes_present(engine: &IntentlyEngine, name: &str) {
+    for (path, extraction) in engine.extractions() {
+        assert!(
+            extraction.content_hash.is_some(),
+            "[{name}] content_hash missing for {}",
+            path.display()
+        );
+    }
+}
+
+/// Run graph analysis pipeline on an engine after extraction.
+fn run_graph_analysis_on(path: &Path, name: &str) {
+    let mut engine = IntentlyEngine::new(path.to_path_buf());
+    let result = engine
+        .full_analysis()
+        .expect("full_analysis should succeed");
+
+    assert_has_graph_stats(&result, name);
+
+    if let Some(ctx) = engine.run_graph_analysis() {
+        eprintln!(
+            "  [{name}] graph analysis: centrality={} entry_points={} flows={} cycles={}",
+            ctx.degree_centrality.len(),
+            ctx.entry_points.len(),
+            ctx.process_flows.len(),
+            ctx.cycles.len(),
+        );
+    } else {
+        eprintln!("  [{name}] graph analysis: no graph available");
+    }
+}
+
+/// Print a multi-line diagnostic report for a project.
+fn print_report(result: &ExtractionResult, name: &str) {
+    let stats = &result.model.stats;
+    let authed = result
+        .model
+        .components
+        .iter()
+        .flat_map(|c| &c.interfaces)
+        .filter(|r| r.auth.is_some())
+        .count();
+    let pii_sinks = result
+        .model
+        .components
+        .iter()
+        .flat_map(|c| &c.sinks)
+        .filter(|s| s.contains_pii)
+        .count();
+    let enriched = result
+        .model
+        .components
+        .iter()
+        .flat_map(|c| &c.symbols)
         .filter(|s| s.signature.is_some())
         .count();
+    let resolved = result
+        .model
+        .components
+        .iter()
+        .flat_map(|c| &c.references)
+        .filter(|r| r.confidence > 0.0)
+        .count();
+    let graph_nodes = result.graph_stats.as_ref().map_or(0, |g| g.total_nodes);
+    let graph_edges = result.graph_stats.as_ref().map_or(0, |g| g.total_edges);
 
     eprintln!(
-        "  {:<28} files={:<5} routes={:<5} auth={:<4} sinks={:<5} pii={:<4} symbols={:<6} enriched={:<5} imports={:<5} time={}ms",
+        "  {:<28} files={:<4} routes={:<4} auth={:<3} sinks={:<4} pii={:<3} symbols={:<5} enriched={:<4} imports={:<4} refs={:<4} resolved={:<4} models={:<3} modules={:<3} components={:<2} graph={}n/{}e time={}ms",
         name,
         result.files_analyzed,
-        result.model.stats.total_interfaces,
+        stats.total_interfaces,
         authed,
-        result.model.stats.total_sinks,
+        stats.total_sinks,
         pii_sinks,
-        result.model.stats.total_symbols,
+        stats.total_symbols,
         enriched,
-        result.model.stats.total_imports,
+        stats.total_imports,
+        stats.total_references,
+        resolved,
+        stats.total_data_models,
+        stats.total_modules,
+        result.model.components.len(),
+        graph_nodes,
+        graph_edges,
         result.timing.total_ms,
     );
 }
@@ -201,14 +392,15 @@ fn typescript_express_realworld() {
     assert_has_enriched_symbols(&result, name);
     assert_has_sinks(&result, name, 1);
     assert_has_imports(&result, name, 5);
+    assert_has_references(&result, name, 1);
+    // Note: Express uses CommonJS require() — resolver produces 0 resolved refs (confidence = 0)
+    assert_has_module_boundaries(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
+    assert_stats_populated(&result, name);
 
-    // Diagnostic: check auth presence
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    // Graph analysis on real TypeScript project
+    run_graph_analysis_on(&path, name);
 }
 
 #[test]
@@ -225,6 +417,9 @@ fn typescript_nestjs_starter() {
     assert_has_symbols(&result, name, 3);
     assert_has_enriched_symbols(&result, name);
     assert_has_imports(&result, name, 5);
+    assert_has_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -248,17 +443,14 @@ fn python_fastapi_fullstack() {
     assert_has_symbols(&result, name, 3);
     assert_has_enriched_symbols(&result, name);
     assert_has_sinks(&result, name, 1);
+    assert_has_references(&result, name, 1);
+    assert_has_resolved_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
+    assert_stats_populated(&result, name);
 
-    // Python extractor does not currently extract imports
-    let imports = result.model.stats.total_imports;
-    eprintln!("  [{name}] imports: {imports} (Python import extraction not yet implemented)");
-
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    // Graph analysis on real Python project
+    run_graph_analysis_on(&path, name);
 }
 
 #[test]
@@ -277,17 +469,10 @@ fn python_flask_realworld() {
     assert_has_routes(&result, name, 3);
     assert_has_symbols(&result, name, 3);
     assert_has_enriched_symbols(&result, name);
-
-    // Flask-realworld may not have detectable log sinks — diagnostic only
-    let sinks = result.model.stats.total_sinks;
-    eprintln!("  [{name}] sinks: {sinks}");
-
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    assert_has_references(&result, name, 1);
+    assert_has_resolved_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
 }
 
 #[test]
@@ -305,10 +490,9 @@ fn python_django_styleguide() {
     assert_basic_invariants(&result, name);
     assert_has_symbols(&result, name, 3);
     assert_has_enriched_symbols(&result, name);
-
-    // Django routes are in urls.py — may or may not match our patterns
-    let routes = result.model.stats.total_interfaces;
-    eprintln!("  [{name}] routes found: {routes}");
+    assert_has_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -329,13 +513,15 @@ fn java_spring_petclinic() {
     assert_has_symbols(&result, name, 10);
     assert_has_enriched_symbols(&result, name);
     assert_has_sinks(&result, name, 1);
+    assert_has_references(&result, name, 1);
+    assert_has_resolved_references(&result, name, 1);
+    assert_has_data_models(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
+    assert_stats_populated(&result, name);
 
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    // Graph analysis on real Java project
+    run_graph_analysis_on(&path, name);
 }
 
 #[test]
@@ -354,13 +540,9 @@ fn java_spring_realworld() {
     assert_has_routes(&result, name, 5);
     assert_has_symbols(&result, name, 10);
     assert_has_enriched_symbols(&result, name);
-
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    assert_has_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -383,13 +565,12 @@ fn csharp_aspnet_realworld() {
     assert_has_routes(&result, name, 3);
     assert_has_symbols(&result, name, 5);
     assert_has_enriched_symbols(&result, name);
+    assert_has_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
 
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    // Graph analysis
+    run_graph_analysis_on(&path, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -410,13 +591,11 @@ fn go_gin_examples() {
     assert_has_symbols(&result, name, 5);
     assert_has_enriched_symbols(&result, name);
     assert_has_sinks(&result, name, 1);
-
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    assert_has_references(&result, name, 1);
+    assert_has_resolved_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
+    assert_stats_populated(&result, name);
 }
 
 #[test]
@@ -435,13 +614,9 @@ fn go_echo_realworld() {
     assert_has_routes(&result, name, 3);
     assert_has_symbols(&result, name, 5);
     assert_has_enriched_symbols(&result, name);
-
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    assert_has_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -465,13 +640,11 @@ fn php_laravel_realworld() {
     assert_has_symbols(&result, name, 3);
     assert_has_enriched_symbols(&result, name);
     assert_has_sinks(&result, name, 1);
-
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    assert_has_references(&result, name, 1);
+    assert_has_resolved_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
+    assert_stats_populated(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -494,17 +667,11 @@ fn ruby_rails_realworld() {
     assert_has_routes(&result, name, 3);
     assert_has_symbols(&result, name, 3);
     assert_has_enriched_symbols(&result, name);
-
-    // Rails-realworld may not have detectable log sinks (Rails.logger pattern)
-    let sinks = result.model.stats.total_sinks;
-    eprintln!("  [{name}] sinks: {sinks}");
-
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
+    assert_has_references(&result, name, 1);
+    assert_has_resolved_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
+    assert_stats_populated(&result, name);
 }
 
 #[test]
@@ -519,11 +686,8 @@ fn ruby_administrate() {
     assert_basic_invariants(&result, name);
     assert_has_symbols(&result, name, 3);
     assert_has_enriched_symbols(&result, name);
-
-    // Rails engine — check what we find
-    let routes = result.model.stats.total_interfaces;
-    let sinks = result.model.stats.total_sinks;
-    eprintln!("  [{name}] routes: {routes}, sinks: {sinks}");
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -547,11 +711,9 @@ fn rust_miniserve() {
     );
     assert_has_symbols(&result, name, 10);
     assert_has_enriched_symbols(&result, name);
-
-    // Rust projects use tracing macros (info!(), warn!()) which are macro invocations,
-    // not object.method() calls. The generic fallback text-matcher may not detect them.
-    let sinks = result.model.stats.total_sinks;
-    eprintln!("  [{name}] sinks: {sinks} (generic fallback — tracing macros may not match)");
+    assert_has_references(&result, name, 1);
+    assert_has_graph_stats(&result, name);
+    assert_anchors_valid(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -572,28 +734,8 @@ fn kotlin_spring_boot() {
 
     assert_basic_invariants(&result, name);
     // Kotlin Spring should extract routes via java extractor
-    let routes = result.model.stats.total_interfaces;
-    eprintln!("  [{name}] routes found: {routes}");
-    assert!(
-        routes >= 1,
-        "[{name}] expected >= 1 route from Kotlin Spring, got {routes}"
-    );
-
-    // Kotlin has no symbol queries — expect 0
-    let symbols = result.model.stats.total_symbols;
-    eprintln!("  [{name}] symbols: {symbols} (no query for Kotlin)");
-
-    // Check auth
-    let authed = result.model.components[0]
-        .interfaces
-        .iter()
-        .filter(|r| r.auth.is_some())
-        .count();
-    eprintln!("  [{name}] authenticated routes: {authed}");
-
-    // Check sinks
-    let sinks = result.model.stats.total_sinks;
-    eprintln!("  [{name}] sinks: {sinks}");
+    assert_has_routes(&result, name, 1);
+    assert_has_graph_stats(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -615,14 +757,7 @@ fn swift_log() {
         result.model.stats.total_interfaces, 0,
         "[{name}] Swift should have 0 routes"
     );
-    // No symbol queries for Swift
-    let symbols = result.model.stats.total_symbols;
-    eprintln!("  [{name}] symbols: {symbols} (no query for Swift)");
-
-    // swift-log defines logging abstractions — actual log.info() patterns
-    // may or may not be detected by the generic text-matcher.
-    let sinks = result.model.stats.total_sinks;
-    eprintln!("  [{name}] sinks: {sinks} (generic fallback)");
+    assert_has_graph_stats(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -643,14 +778,7 @@ fn c_cjson() {
         result.model.stats.total_interfaces, 0,
         "[{name}] C should have 0 routes"
     );
-
-    // No symbol queries for C
-    let symbols = result.model.stats.total_symbols;
-    eprintln!("  [{name}] symbols: {symbols} (no query for C)");
-
-    // cJSON likely has printf/fprintf calls
-    let sinks = result.model.stats.total_sinks;
-    eprintln!("  [{name}] sinks: {sinks}");
+    assert_has_graph_stats(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -671,13 +799,7 @@ fn cpp_leveldb() {
         result.model.stats.total_interfaces, 0,
         "[{name}] C++ should have 0 routes"
     );
-
-    // No symbol queries for C++
-    let symbols = result.model.stats.total_symbols;
-    eprintln!("  [{name}] symbols: {symbols} (no query for C++)");
-
-    let sinks = result.model.stats.total_sinks;
-    eprintln!("  [{name}] sinks: {sinks}");
+    assert_has_graph_stats(&result, name);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -698,13 +820,214 @@ fn scala_play_seed() {
         result.model.stats.total_interfaces, 0,
         "[{name}] Scala should have 0 routes"
     );
+    assert_has_graph_stats(&result, name);
+}
 
-    // No symbol queries for Scala
-    let symbols = result.model.stats.total_symbols;
-    eprintln!("  [{name}] symbols: {symbols} (no query for Scala)");
+// ═══════════════════════════════════════════════════════════════════
+//  Workspace / Monorepo Tests
+// ═══════════════════════════════════════════════════════════════════
 
-    let sinks = result.model.stats.total_sinks;
-    eprintln!("  [{name}] sinks: {sinks}");
+#[test]
+#[ignore]
+fn workspace_cargo_tokio_console() {
+    let name = "tokio-console";
+    let (_tmp, path) = clone_repo("https://github.com/tokio-rs/console", None);
+
+    let (engine, result) = analyze_repo_with_engine(&path, 180);
+    print_report(&result, name);
+
+    assert_basic_invariants(&result, name);
+
+    // Workspace detection
+    let layout = engine
+        .workspace_layout()
+        .expect("[tokio-console] expected workspace_layout to be Some");
+    assert_eq!(
+        layout.kind,
+        WorkspaceKind::Cargo,
+        "[{name}] expected Cargo workspace"
+    );
+    assert!(
+        layout.packages.len() >= 2,
+        "[{name}] expected >= 2 workspace packages, got {}",
+        layout.packages.len()
+    );
+
+    // Multi-component model
+    assert!(
+        result.model.components.len() >= 2,
+        "[{name}] expected >= 2 components, got {}",
+        result.model.components.len()
+    );
+
+    assert_has_symbols(&result, name, 10);
+    assert_has_graph_stats(&result, name);
+    assert_content_hashes_present(&engine, name);
+
+    eprintln!(
+        "  [{name}] workspace: kind={:?} packages={} components={}",
+        layout.kind,
+        layout.packages.len(),
+        result.model.components.len(),
+    );
+}
+
+#[test]
+#[ignore]
+fn workspace_pnpm_drizzle_orm() {
+    let name = "drizzle-orm";
+    let (_tmp, path) = clone_repo("https://github.com/drizzle-team/drizzle-orm", None);
+
+    let (engine, result) = analyze_repo_with_engine(&path, 300);
+    print_report(&result, name);
+
+    assert_basic_invariants(&result, name);
+
+    // Workspace detection
+    let layout = engine
+        .workspace_layout()
+        .expect("[drizzle-orm] expected workspace_layout to be Some");
+    assert_eq!(
+        layout.kind,
+        WorkspaceKind::Pnpm,
+        "[{name}] expected Pnpm workspace"
+    );
+    assert!(
+        layout.packages.len() >= 3,
+        "[{name}] expected >= 3 workspace packages, got {}",
+        layout.packages.len()
+    );
+
+    // Multi-component model
+    assert!(
+        result.model.components.len() >= 2,
+        "[{name}] expected >= 2 components, got {}",
+        result.model.components.len()
+    );
+
+    assert_has_symbols(&result, name, 50);
+    assert_has_imports(&result, name, 20);
+    assert_has_graph_stats(&result, name);
+    assert_content_hashes_present(&engine, name);
+
+    eprintln!(
+        "  [{name}] workspace: kind={:?} packages={} components={}",
+        layout.kind,
+        layout.packages.len(),
+        result.model.components.len(),
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Incremental Pipeline & Semantic Diff
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+#[ignore]
+fn incremental_pipeline_with_semantic_diff() {
+    let name = "incremental-express";
+    let (_tmp, path) = clone_repo(
+        "https://github.com/gothinkster/node-express-realworld-example-app",
+        None,
+    );
+
+    // Full analysis — first run should have no diff
+    let (mut engine, initial_result) = analyze_repo_with_engine(&path, 120);
+    assert_basic_invariants(&initial_result, name);
+    assert!(
+        initial_result.diff.is_none(),
+        "[{name}] first full_analysis() should have diff = None"
+    );
+
+    // Find a route file to modify
+    let target_file = engine
+        .sources()
+        .keys()
+        .find(|p| {
+            let s = p.to_string_lossy();
+            s.contains("route") && (s.ends_with(".js") || s.ends_with(".ts"))
+        })
+        .cloned()
+        .expect("[{name}] expected at least one route file in sources");
+
+    // Append a new route to the file on disk
+    let original_content = std::fs::read_to_string(&target_file).expect("should read route file");
+    let modified_content = format!(
+        "{}\nrouter.get('/test-incremental', function(req, res) {{ res.json({{ok: true}}); }});\n",
+        original_content
+    );
+    std::fs::write(&target_file, &modified_content).expect("should write modified route file");
+
+    // Incremental update
+    let incremental_result = engine
+        .on_file_changed(&target_file)
+        .expect("[{name}] on_file_changed() should succeed");
+
+    // Semantic diff should detect the change
+    let diff = incremental_result
+        .diff
+        .as_ref()
+        .expect("[{name}] incremental result should have diff = Some");
+
+    let total_changes =
+        diff.interface_changes.len() + diff.dependency_changes.len() + diff.sink_changes.len();
+    assert!(
+        total_changes > 0,
+        "[{name}] expected at least 1 semantic change, got 0"
+    );
+
+    eprintln!(
+        "  [{name}] incremental diff: interfaces={} deps={} sinks={} risk=({:?}/{:?})",
+        diff.interface_changes.len(),
+        diff.dependency_changes.len(),
+        diff.sink_changes.len(),
+        diff.risk_summary.security,
+        diff.risk_summary.reliability,
+    );
+
+    assert_content_hashes_present(&engine, name);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ast-grep Structural Search
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+#[ignore]
+fn ast_grep_structural_search_on_real_code() {
+    let name = "ast-grep-express";
+    let (_tmp, path) = clone_repo(
+        "https://github.com/gothinkster/node-express-realworld-example-app",
+        None,
+    );
+
+    let (engine, _result) = analyze_repo_with_engine(&path, 120);
+
+    // Search for require() calls — common in Express/Node.js
+    let patterns = vec![SearchPattern {
+        id: "require-call".into(),
+        language: SupportedLanguage::JavaScript,
+        pattern_text: "require($MODULE)".into(),
+        kind: "call_site".into(),
+    }];
+    let search = StructuralSearch::from_patterns(&patterns)
+        .expect("[{name}] StructuralSearch::from_patterns should succeed");
+
+    let mut total_matches = 0;
+    for (file_path, source) in engine.sources() {
+        let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext == "js" || ext == "ts" {
+            let matches = search.search_file(source, SupportedLanguage::JavaScript, file_path);
+            total_matches += matches.len();
+        }
+    }
+
+    assert!(
+        total_matches >= 1,
+        "[{name}] expected >= 1 require() match, got {total_matches}"
+    );
+
+    eprintln!("  [{name}] ast-grep: {total_matches} require() matches found");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -805,10 +1128,22 @@ const SUMMARY_PROJECTS: &[ProjectSpec] = &[
 fn summary_all_languages() {
     eprintln!();
     eprintln!(
-        "{:<24} {:<14} {:>5} {:>7} {:>6} {:>6} {:>8} {:>8}",
-        "Project", "Language", "Files", "Routes", "Auth", "Sinks", "Symbols", "TimeMs"
+        "{:<24} {:<10} {:>5} {:>6} {:>4} {:>5} {:>6} {:>5} {:>4} {:>5} {:>5} {:>5} {:>7}",
+        "Project",
+        "Language",
+        "Files",
+        "Routes",
+        "Auth",
+        "Sinks",
+        "Syms",
+        "Impts",
+        "Refs",
+        "Rslvd",
+        "DModl",
+        "Graph",
+        "TimeMs"
     );
-    eprintln!("{}", "─".repeat(90));
+    eprintln!("{}", "─".repeat(120));
 
     let mut all_ok = true;
 
@@ -820,18 +1155,37 @@ fn summary_all_languages() {
 
         match result {
             Ok(analysis) => {
-                let comp = &analysis.model.components[0];
-                let authed = comp.interfaces.iter().filter(|r| r.auth.is_some()).count();
+                let stats = &analysis.model.stats;
+                let authed = analysis
+                    .model
+                    .components
+                    .iter()
+                    .flat_map(|c| &c.interfaces)
+                    .filter(|r| r.auth.is_some())
+                    .count();
+                let resolved = analysis
+                    .model
+                    .components
+                    .iter()
+                    .flat_map(|c| &c.references)
+                    .filter(|r| r.confidence > 0.0)
+                    .count();
+                let graph_nodes = analysis.graph_stats.as_ref().map_or(0, |g| g.total_nodes);
 
                 eprintln!(
-                    "{:<24} {:<14} {:>5} {:>7} {:>6} {:>6} {:>8} {:>8}",
+                    "{:<24} {:<10} {:>5} {:>6} {:>4} {:>5} {:>6} {:>5} {:>4} {:>5} {:>5} {:>5} {:>7}",
                     spec.name,
                     spec.language,
                     analysis.files_analyzed,
-                    analysis.model.stats.total_interfaces,
+                    stats.total_interfaces,
                     authed,
-                    analysis.model.stats.total_sinks,
-                    analysis.model.stats.total_symbols,
+                    stats.total_sinks,
+                    stats.total_symbols,
+                    stats.total_imports,
+                    stats.total_references,
+                    resolved,
+                    stats.total_data_models,
+                    graph_nodes,
                     analysis.timing.total_ms,
                 );
             }
@@ -843,13 +1197,13 @@ fn summary_all_languages() {
                 } else {
                     "unknown error"
                 };
-                eprintln!("{:<24} {:<14} FAILED: {}", spec.name, spec.language, msg);
+                eprintln!("{:<24} {:<10} FAILED: {}", spec.name, spec.language, msg);
                 all_ok = false;
             }
         }
     }
 
-    eprintln!("{}", "─".repeat(90));
+    eprintln!("{}", "─".repeat(120));
 
     assert!(all_ok, "one or more projects failed analysis");
 }

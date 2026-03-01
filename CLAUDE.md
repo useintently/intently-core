@@ -58,11 +58,14 @@ intently-core/
 │   │       ├── call_graph.rs   # Call site detection per language (via LanguageBehavior)
 │   │       ├── type_hierarchy.rs # extends/implements detection
 │   │       └── data_models.rs  # Struct/class/interface field extraction
-│   └── search/             # ast-grep structural code search
-│       ├── mod.rs
-│       └── pattern_engine.rs
+│   ├── search/             # ast-grep structural code search
+│   │   ├── mod.rs
+│   │   └── pattern_engine.rs
+│   └── workspace/          # Monorepo workspace detection
+│       ├── mod.rs          # Types (WorkspaceKind, WorkspaceLayout, WorkspacePackage) + detect_workspace()
+│       └── detect.rs       # 5 manifest parsers (pnpm, npm, Cargo, Go, uv)
 ├── tests/
-│   ├── fixtures/           # 20 multi-file projects across 16 languages
+│   ├── fixtures/           # 22 multi-file projects across 16 languages
 │   ├── full_extraction.rs  # Integration tests: full pipeline per language
 │   └── real_world_validation.rs  # Real GitHub repo validation (#[ignore])
 ├── docs/
@@ -96,6 +99,20 @@ intently-core/
 | Swift | `generic.rs` | (log sinks only) |
 | Scala | `generic.rs` | (log sinks only) |
 
+## Supported Workspace Formats
+
+When pointed at a monorepo root, `intently-core` automatically detects the workspace layout and produces one `Component` per package. Single-project repos continue to work unchanged (one default component).
+
+| Format | Manifest File | Member Discovery |
+|--------|--------------|-----------------|
+| pnpm | `pnpm-workspace.yaml` | `packages:` glob patterns |
+| npm/yarn | `package.json` | `"workspaces"` field (array or object) |
+| Cargo | `Cargo.toml` | `[workspace] members` globs |
+| Go | `go.work` | `use (...)` block parsing |
+| uv | `pyproject.toml` | `[tool.uv.workspace] members` globs |
+
+Detection order: pnpm → npm → Cargo → Go → uv → single-project fallback.
+
 ---
 
 ## Public API
@@ -117,6 +134,9 @@ let extraction: FileExtraction = engine.analyze_single_file(path)?;
 let sources: &HashMap<PathBuf, String> = engine.sources();
 let extractions: &HashMap<PathBuf, FileExtraction> = engine.extractions();
 let graph: Option<&KnowledgeGraph> = engine.graph();
+
+// Workspace detection (automatic — populated after new() or full_analysis())
+let layout: Option<&WorkspaceLayout> = engine.workspace_layout();
 
 // Graph analysis (after extraction)
 let ctx: Option<AnalysisContext> = engine.run_graph_analysis();
@@ -154,7 +174,7 @@ pub struct ExtractionResult {
 <type>(<scope>): <description>
 
 Types: feat, fix, refactor, docs, test, chore
-Scopes: parser, model, extractors, graph, diff, search, engine
+Scopes: parser, model, extractors, graph, diff, search, engine, workspace
 ```
 
 ---

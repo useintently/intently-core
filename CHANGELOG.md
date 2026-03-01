@@ -7,7 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `CodeModel::filtered(min_confidence)` — returns a filtered copy with only references at or above the confidence threshold, recalculates stats and filters directory dependencies
+- `Reference.is_test_reference` boolean field — `true` when source file has `FileRole::Test` and target file does not, enabling downstream consumers to separate test→production edges from production architecture
+- Test→production reference tagging in `CodeModelBuilder` after import resolution — automatically classifies cross-boundary references during model build
+- 12 new tests: 7 unit tests for `filtered()` and `is_test_reference` serde, 3 unit tests for builder tagging logic, 2 integration tests for pipeline-level validation (from 522 to 534 total)
+- `FileTree` hierarchical directory structure in `CodeModel` — recursive `DirectoryNode` with files, subdirectories, role classification, and aggregated stats
+- `DirectoryRole` enum (Source, Test, Config, Documentation, Generated, Build, Mixed) inferred by majority vote of direct file roles
+- `DirectoryStats` per-directory metrics: direct/total file count, estimated tokens, languages, depth
+- `FileEntry` lightweight file summary within directory nodes
+- Inter-directory dependency analysis: `DirectoryDependency` with reference count, avg/max confidence from resolved `Reference` data
+- `total_directories` field on `CodeModelStats`
+- Re-exported `FileTree`, `DirectoryNode`, `DirectoryRole`, `DirectoryStats`, `DirectoryDependency`, `FileEntry` from public API
+- 18 new file tree unit tests + 2 integration tests
+- Workspace detection for pnpm, npm/yarn, Cargo, Go, and uv monorepos — automatically discovers sub-packages from manifest files
+- Multi-component `CodeModel`: one `Component` per workspace package with per-package import resolution and module inference
+- `WorkspaceLayout`, `WorkspaceKind`, `WorkspacePackage` public types for downstream consumers
+- `IntentlyEngine::workspace_layout()` accessor — returns detected workspace layout or `None` for single-project repos
+- `CodeModelBuilder::set_file_in_component()` for routing extractions to named components
+- `CodeModelBuilder::set_component_root()` for per-package import resolution roots
+- `toml`, `serde_yaml`, `glob` dependencies for manifest parsing
+- `IntentlyError::WorkspaceDetection` error variant for typed workspace parse failures
+- 2 new monorepo test fixtures: `pnpm_monorepo/` (2 TS packages) and `cargo_monorepo/` (2 Rust crates)
+- 28 new tests: 19 workspace detection unit tests, 4 builder multi-component tests, 5 monorepo integration tests (from 474 to 502 total)
+- `FileRole` enum with `from_path()` heuristic classification: Generated > Test > Documentation > Build > Config > Implementation > Other
+- Token estimation (`estimate_tokens()`) using `bytes / 4` heuristic on `FileExtraction`
+- `TokenBudget` struct for downstream token budget enforcement
+- SHA-256 content fingerprinting on `FileExtraction.content_hash` via `sha2` crate — enables cache invalidation
+- `file_roles` breakdown and `total_estimated_tokens` in `CodeModelStats`
+- Re-exported `FileRole`, `TokenBudget`, `estimate_tokens` from `lib.rs` public API
+- 14 new unit tests for FileRole classification, token estimation, content hashing, and stats aggregation
+- Real-world validation tests for Cargo workspace (`tokio-rs/console`) and pnpm workspace (`drizzle-team/drizzle-orm`) detection
+- Real-world validation test for incremental pipeline with semantic diff on modified route files
+- Real-world validation test for ast-grep structural search (`require()` pattern matching on real code)
+- `assert_stats_populated` and `assert_content_hashes_present` assertion helpers in real-world validation harness
+
 ### Changed
+- `CodeModel` now includes `file_tree: Option<FileTree>` field — built automatically during `CodeModelBuilder::build()`
+- `CodeModelBuilder` accepts optional `WorkspaceLayout` via `set_workspace_layout()` for component-aware file tree construction
+- `CodeModelBuilder` refactored from flat `HashMap<PathBuf, FileContribution>` to per-component `HashMap<String, ComponentState>` — single-project output is structurally identical (backward compatible)
+- `CodeModelBuilder::build()` now runs import resolution and module inference per-component using each package's own root path
+- `CodeModelBuilder::remove_file()` now searches across all components
+- `IntentlyEngine::full_analysis()` and `on_file_changed()` route files to correct workspace component via longest-prefix matching
+- Real-world validation helpers refactored to support multi-component CodeModel — `flat_map()` across all components instead of hardcoded `components[0]`
 - Renamed `SystemTwin` to `CodeModel` — more precise name for a semantic snapshot (not a live mirror)
 - Renamed module `twin/` to `model/`, `TwinBuilder` to `CodeModelBuilder`, `TwinStats` to `CodeModelStats`
 - Renamed `ExtractionResult.twin` field to `ExtractionResult.model`

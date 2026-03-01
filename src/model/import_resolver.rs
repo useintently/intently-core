@@ -153,6 +153,7 @@ pub fn resolve_all_references(
             reference_kind: reference.reference_kind,
             confidence,
             resolution_method: method,
+            is_test_reference: false,
         });
     }
 
@@ -256,6 +257,7 @@ fn resolve_relative_import(
                 reference_kind: ReferenceKind::Import,
                 confidence,
                 resolution_method,
+                is_test_reference: false,
             }
         })
         .collect()
@@ -284,6 +286,7 @@ fn resolve_external_import(
             reference_kind: ReferenceKind::Import,
             confidence: 0.0,
             resolution_method: ResolutionMethod::Unresolved,
+            is_test_reference: false,
         })
         .collect()
 }
