@@ -377,7 +377,7 @@ pub struct ModuleBoundary {
 // ---------------------------------------------------------------------------
 
 /// Aggregate statistics about the code model.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct CodeModelStats {
     pub files_analyzed: usize,
     pub total_interfaces: usize,

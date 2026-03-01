@@ -41,7 +41,8 @@ fn clone_repo(url: &str, subdir: Option<&str>) -> (TempDir, PathBuf) {
     let status = Command::new("git")
         .args([
             "clone",
-            "--depth", "1",
+            "--depth",
+            "1",
             "--single-branch",
             url,
             tmpdir.path().join("repo").to_str().unwrap(),
@@ -101,10 +102,7 @@ fn assert_basic_invariants(result: &ExtractionResult, name: &str) {
         "[{name}] expected files_analyzed > 0, got {}",
         result.files_analyzed
     );
-    assert!(
-        result.timing.total_ms > 0,
-        "[{name}] expected total_ms > 0"
-    );
+    assert!(result.timing.total_ms > 0, "[{name}] expected total_ms > 0");
 }
 
 /// Assert the repo produces at least `min` routes.
@@ -160,7 +158,11 @@ fn print_report(result: &ExtractionResult, name: &str) {
     let comp = &result.model.components[0];
     let authed = comp.interfaces.iter().filter(|r| r.auth.is_some()).count();
     let pii_sinks = comp.sinks.iter().filter(|s| s.contains_pii).count();
-    let enriched = comp.symbols.iter().filter(|s| s.signature.is_some()).count();
+    let enriched = comp
+        .symbols
+        .iter()
+        .filter(|s| s.signature.is_some())
+        .count();
 
     eprintln!(
         "  {:<28} files={:<5} routes={:<5} auth={:<4} sinks={:<5} pii={:<4} symbols={:<6} enriched={:<5} imports={:<5} time={}ms",
@@ -213,10 +215,7 @@ fn typescript_express_realworld() {
 #[ignore]
 fn typescript_nestjs_starter() {
     let name = "nestjs-starter";
-    let (_tmp, path) = clone_repo(
-        "https://github.com/nestjs/typescript-starter",
-        None,
-    );
+    let (_tmp, path) = clone_repo("https://github.com/nestjs/typescript-starter", None);
 
     let result = analyze_repo(&path, 120);
     print_report(&result, name);
@@ -320,10 +319,7 @@ fn python_django_styleguide() {
 #[ignore]
 fn java_spring_petclinic() {
     let name = "spring-petclinic";
-    let (_tmp, path) = clone_repo(
-        "https://github.com/spring-projects/spring-petclinic",
-        None,
-    );
+    let (_tmp, path) = clone_repo("https://github.com/spring-projects/spring-petclinic", None);
 
     let result = analyze_repo(&path, 120);
     print_report(&result, name);
@@ -404,10 +400,7 @@ fn csharp_aspnet_realworld() {
 #[ignore]
 fn go_gin_examples() {
     let name = "gin-examples";
-    let (_tmp, path) = clone_repo(
-        "https://github.com/gin-gonic/examples",
-        None,
-    );
+    let (_tmp, path) = clone_repo("https://github.com/gin-gonic/examples", None);
 
     let result = analyze_repo(&path, 120);
     print_report(&result, name);
@@ -518,10 +511,7 @@ fn ruby_rails_realworld() {
 #[ignore]
 fn ruby_administrate() {
     let name = "administrate";
-    let (_tmp, path) = clone_repo(
-        "https://github.com/thoughtbot/administrate",
-        None,
-    );
+    let (_tmp, path) = clone_repo("https://github.com/thoughtbot/administrate", None);
 
     let result = analyze_repo(&path, 120);
     print_report(&result, name);
@@ -544,10 +534,7 @@ fn ruby_administrate() {
 #[ignore]
 fn rust_miniserve() {
     let name = "miniserve";
-    let (_tmp, path) = clone_repo(
-        "https://github.com/svenstaro/miniserve",
-        None,
-    );
+    let (_tmp, path) = clone_repo("https://github.com/svenstaro/miniserve", None);
 
     let result = analyze_repo(&path, 120);
     print_report(&result, name);
@@ -617,10 +604,7 @@ fn kotlin_spring_boot() {
 #[ignore]
 fn swift_log() {
     let name = "swift-log";
-    let (_tmp, path) = clone_repo(
-        "https://github.com/apple/swift-log",
-        None,
-    );
+    let (_tmp, path) = clone_repo("https://github.com/apple/swift-log", None);
 
     let result = analyze_repo(&path, 120);
     print_report(&result, name);
@@ -649,10 +633,7 @@ fn swift_log() {
 #[ignore]
 fn c_cjson() {
     let name = "cJSON";
-    let (_tmp, path) = clone_repo(
-        "https://github.com/DaveGamble/cJSON",
-        None,
-    );
+    let (_tmp, path) = clone_repo("https://github.com/DaveGamble/cJSON", None);
 
     let result = analyze_repo(&path, 120);
     print_report(&result, name);
@@ -680,10 +661,7 @@ fn c_cjson() {
 #[ignore]
 fn cpp_leveldb() {
     let name = "leveldb";
-    let (_tmp, path) = clone_repo(
-        "https://github.com/google/leveldb",
-        None,
-    );
+    let (_tmp, path) = clone_repo("https://github.com/google/leveldb", None);
 
     let result = analyze_repo(&path, 120);
     print_report(&result, name);
@@ -710,10 +688,7 @@ fn cpp_leveldb() {
 #[ignore]
 fn scala_play_seed() {
     let name = "play-scala-seed";
-    let (_tmp, path) = clone_repo(
-        "https://github.com/playframework/play-scala-seed.g8",
-        None,
-    );
+    let (_tmp, path) = clone_repo("https://github.com/playframework/play-scala-seed.g8", None);
 
     let result = analyze_repo(&path, 120);
     print_report(&result, name);
@@ -868,10 +843,7 @@ fn summary_all_languages() {
                 } else {
                     "unknown error"
                 };
-                eprintln!(
-                    "{:<24} {:<14} FAILED: {}",
-                    spec.name, spec.language, msg
-                );
+                eprintln!("{:<24} {:<14} FAILED: {}", spec.name, spec.language, msg);
                 all_ok = false;
             }
         }

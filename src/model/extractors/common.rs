@@ -34,10 +34,28 @@ pub fn node_text(node: &Node, source: &str) -> String {
     source[node.start_byte()..node.end_byte()].to_string()
 }
 
+/// Extract the source text spanned by a tree-sitter node as a borrowed slice.
+///
+/// Zero-copy alternative to [`node_text`] — returns a `&str` tied to the
+/// source lifetime instead of allocating a new `String`. Use this when
+/// the text is only needed for comparisons, pattern matching, or other
+/// read-only operations within the same scope.
+pub fn node_text_ref<'a>(node: &Node, source: &'a str) -> &'a str {
+    node.utf8_text(source.as_bytes()).unwrap_or("")
+}
+
 /// Strip surrounding quote characters (single, double, or backtick).
 pub fn strip_quotes(s: &str) -> String {
     s.trim_matches(|c| c == '\'' || c == '"' || c == '`')
         .to_string()
+}
+
+/// Strip surrounding quote characters without allocating.
+///
+/// Zero-copy alternative to [`strip_quotes`] — returns a `&str` slice
+/// of the input with leading/trailing quote characters removed.
+pub fn strip_quotes_ref(s: &str) -> &str {
+    s.trim_matches(|c| c == '\'' || c == '"' || c == '`')
 }
 
 /// Try to parse a string literal from an argument's text.
@@ -50,7 +68,7 @@ pub fn extract_string_value(text: &str) -> Option<String> {
         || (text.starts_with('"') && text.ends_with('"'))
         || (text.starts_with('`') && text.ends_with('`'))
     {
-        Some(strip_quotes(text))
+        Some(strip_quotes_ref(text).to_string())
     } else {
         None
     }
@@ -105,6 +123,7 @@ pub fn parse_http_method(name: &str) -> Option<HttpMethod> {
 /// - C#: `invocation_expression`
 /// - PHP: `member_call_expression`, `function_call_expression`, `scoped_call_expression`
 /// - Ruby: `method_call`
+#[deprecated(note = "Use LanguageBehavior::call_node_kinds() for language-specific call detection")]
 pub fn is_call_node(kind: &str) -> bool {
     matches!(
         kind,
@@ -131,10 +150,9 @@ pub fn try_extract_log_sink(
     file_path: &Path,
     extraction: &mut FileExtraction,
 ) {
-    let call_text = node_text(node, source);
-
-    // Quick exit: does the call text contain any log object name?
-    let call_lower = call_text.to_lowercase();
+    // Quick exit using zero-copy text: does the call text contain any log object name?
+    let call_ref = node_text_ref(node, source);
+    let call_lower = call_ref.to_lowercase();
     let has_log_object = patterns::LOG_OBJECTS
         .iter()
         .any(|obj| call_lower.contains(&obj.to_lowercase()));
@@ -149,12 +167,12 @@ pub fn try_extract_log_sink(
         for method in patterns::LOG_METHODS {
             let dot_pattern = format!("{obj}.{method}(");
             let scope_pattern = format!("{obj}::{method}(");
-            if call_text.contains(&dot_pattern) || call_text.contains(&scope_pattern) {
-                let pii = patterns::contains_pii(&call_text);
+            if call_ref.contains(&dot_pattern) || call_ref.contains(&scope_pattern) {
+                let pii = patterns::contains_pii(call_ref);
                 extraction.sinks.push(Sink {
                     sink_type: SinkType::Log,
                     anchor: anchor_from_node(node, file_path),
-                    text: call_text,
+                    text: call_ref.to_string(),
                     contains_pii: pii,
                 });
                 return;
@@ -214,12 +232,24 @@ mod tests {
 
     #[test]
     fn extract_string_value_from_quoted_text() {
-        assert_eq!(extract_string_value("'/api/users'"), Some("/api/users".into()));
-        assert_eq!(extract_string_value("\"/api/users\""), Some("/api/users".into()));
-        assert_eq!(extract_string_value("`/api/users`"), Some("/api/users".into()));
+        assert_eq!(
+            extract_string_value("'/api/users'"),
+            Some("/api/users".into())
+        );
+        assert_eq!(
+            extract_string_value("\"/api/users\""),
+            Some("/api/users".into())
+        );
+        assert_eq!(
+            extract_string_value("`/api/users`"),
+            Some("/api/users".into())
+        );
         assert_eq!(extract_string_value("variable"), None);
         assert_eq!(extract_string_value("123"), None);
-        assert_eq!(extract_string_value("  '/spaced'  "), Some("/spaced".into()));
+        assert_eq!(
+            extract_string_value("  '/spaced'  "),
+            Some("/spaced".into())
+        );
     }
 
     #[test]
@@ -240,6 +270,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn is_call_node_matches_all_language_variants() {
         assert!(is_call_node("call_expression"));
         assert!(is_call_node("call"));

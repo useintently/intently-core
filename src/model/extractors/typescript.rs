@@ -15,13 +15,13 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::patterns;
 use crate::model::types::*;
+use crate::parser::SupportedLanguage;
 
 use super::common::{
-    self, anchor_from_node, collect_arguments, extract_string_value, node_text, strip_quotes,
-    truncate_call_text, ArgumentInfo,
+    self, anchor_from_node, collect_arguments, extract_string_value, node_text, node_text_ref,
+    strip_quotes, truncate_call_text, ArgumentInfo,
 };
 
 /// NestJS HTTP route decorator names → HTTP methods.
@@ -56,12 +56,7 @@ pub fn extract(
     extraction
 }
 
-fn extract_recursive(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     match node.kind() {
         "call_expression" => {
             try_extract_route(node, source, file_path, extraction);
@@ -86,12 +81,7 @@ fn extract_recursive(
 }
 
 /// Try to extract an Express route from `app.get('/path', handler)`.
-fn try_extract_route(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn try_extract_route(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     let function_node = match node.child_by_field_name("function") {
         Some(n) if n.kind() == "member_expression" => n,
         _ => return,
@@ -102,12 +92,12 @@ fn try_extract_route(
         None => return,
     };
 
-    let method_name = node_text(&method_node, source);
-    if !ROUTE_METHODS.contains(&method_name.as_str()) {
+    let method_name = node_text_ref(&method_node, source);
+    if !ROUTE_METHODS.contains(&method_name) {
         return;
     }
 
-    let http_method = match common::parse_http_method(&method_name) {
+    let http_method = match common::parse_http_method(method_name) {
         Some(m) => m,
         None => return,
     };
@@ -165,12 +155,12 @@ fn try_extract_http_call(
     };
 
     let is_fetch =
-        function_node.kind() == "identifier" && node_text(&function_node, source) == "fetch";
+        function_node.kind() == "identifier" && node_text_ref(&function_node, source) == "fetch";
 
     let is_axios = function_node.kind() == "member_expression"
         && function_node
             .child_by_field_name("object")
-            .map(|obj| node_text(&obj, source) == "axios")
+            .map(|obj| node_text_ref(&obj, source) == "axios")
             .unwrap_or(false);
 
     if !is_fetch && !is_axios {
@@ -200,19 +190,19 @@ fn try_extract_log_sink(
     };
 
     let object_name = match function_node.child_by_field_name("object") {
-        Some(obj) => node_text(&obj, source),
+        Some(obj) => node_text_ref(&obj, source),
         None => return,
     };
 
     let method_name = match function_node.child_by_field_name("property") {
-        Some(prop) => node_text(&prop, source),
+        Some(prop) => node_text_ref(&prop, source),
         None => return,
     };
 
-    if !patterns::LOG_OBJECTS.contains(&object_name.as_str()) {
+    if !patterns::LOG_OBJECTS.contains(&object_name) {
         return;
     }
-    if !patterns::LOG_METHODS.contains(&method_name.as_str()) {
+    if !patterns::LOG_METHODS.contains(&method_name) {
         return;
     }
 
@@ -397,10 +387,7 @@ fn collect_decorators(node: &Node, source: &str) -> Vec<(String, Option<String>,
 /// is NOT a string literal — it's a call expression. We capture:
 /// - `first_string_arg`: the first simple string argument (e.g., 'articles')
 /// - `first_arg_text`: the raw text of the first argument for complex expressions
-fn parse_decorator_node(
-    decorator: &Node,
-    source: &str,
-) -> Option<(String, Option<String>, usize)> {
+fn parse_decorator_node(decorator: &Node, source: &str) -> Option<(String, Option<String>, usize)> {
     let line = decorator.start_position().row + 1;
 
     // The decorator expression is the first named child (after `@`)
@@ -424,9 +411,7 @@ fn parse_decorator_node(
                     let arg_list = collect_arguments(&args, source);
                     arg_list.into_iter().next()
                 })
-                .map(|arg| {
-                    extract_string_value(&arg.text).unwrap_or(arg.text)
-                });
+                .map(|arg| extract_string_value(&arg.text).unwrap_or(arg.text));
 
             Some((name, first_arg, line))
         }
@@ -435,9 +420,7 @@ fn parse_decorator_node(
 }
 
 /// Detect auth from NestJS `@UseGuards(...)` decorator.
-fn detect_nestjs_auth(
-    decorators: &[(String, Option<String>, usize)],
-) -> Option<AuthKind> {
+fn detect_nestjs_auth(decorators: &[(String, Option<String>, usize)]) -> Option<AuthKind> {
     for (name, arg, _) in decorators {
         if name == "UseGuards" {
             let guard_detail = arg.as_deref().unwrap_or("AuthGuard");
@@ -481,9 +464,9 @@ fn find_child_by_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
 fn collect_import_specifiers(node: &Node, source: &str, specifiers: &mut Vec<String>) {
     match node.kind() {
         "identifier" => {
-            let text = node_text(node, source);
+            let text = node_text_ref(node, source);
             if text != "from" && text != "import" && text != "as" {
-                specifiers.push(text);
+                specifiers.push(text.to_string());
             }
         }
         "import_specifier" => {
@@ -521,11 +504,13 @@ mod tests {
 
     #[test]
     fn extracts_express_get_route() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 import express from 'express';
 const app = express();
 app.get('/api/users', (req, res) => res.json([]));
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/api/users");
@@ -533,41 +518,55 @@ app.get('/api/users', (req, res) => res.json([]));
 
     #[test]
     fn extracts_express_post_route() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 const router = require('express').Router();
 router.post('/api/items', (req, res) => res.status(201).json({}));
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Post);
     }
 
     #[test]
     fn detects_auth_middleware_on_route() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 app.post('/api/orders', authMiddleware, (req, res) => {
     res.json({ ok: true });
 });
-"#);
-        assert_eq!(ext.interfaces[0].auth, Some(AuthKind::Middleware("authMiddleware".into())));
+"#,
+        );
+        assert_eq!(
+            ext.interfaces[0].auth,
+            Some(AuthKind::Middleware("authMiddleware".into()))
+        );
     }
 
     #[test]
     fn detects_jwt_middleware() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 app.delete('/api/users/:id', verifyJwt, validateAdmin, (req, res) => {
     res.status(204).send();
 });
-"#);
+"#,
+        );
         assert!(ext.interfaces[0].auth.is_some());
     }
 
     #[test]
     fn extracts_fetch_http_call() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 const resp = await fetch("https://api.example.com/users");
-"#);
+"#,
+        );
         assert_eq!(ext.dependencies.len(), 1);
-        assert_eq!(ext.dependencies[0].dependency_type, DependencyType::HttpCall);
+        assert_eq!(
+            ext.dependencies[0].dependency_type,
+            DependencyType::HttpCall
+        );
     }
 
     #[test]
@@ -578,20 +577,24 @@ const resp = await fetch("https://api.example.com/users");
 
     #[test]
     fn extracts_console_log_sinks() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 console.log("Server started");
 console.error("Something failed");
-"#);
+"#,
+        );
         assert_eq!(ext.sinks.len(), 2);
         assert!(!ext.sinks[0].contains_pii);
     }
 
     #[test]
     fn extracts_logger_sinks() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 logger.info("Request processed");
 logger.warn("Slow query");
-"#);
+"#,
+        );
         assert_eq!(ext.sinks.len(), 2);
     }
 
@@ -609,10 +612,12 @@ logger.warn("Slow query");
 
     #[test]
     fn extracts_imports() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 import express from 'express';
 import { Router, Request } from 'express';
-"#);
+"#,
+        );
         assert_eq!(ext.imports.len(), 2);
         assert_eq!(ext.imports[0].source, "express");
     }
@@ -628,7 +633,8 @@ app.get('/api/data', (req, res) => {
     res.json({ ok: true });
 });
 "#;
-        let parsed = parser::parse_source(&path, source, SupportedLanguage::JavaScript, None).unwrap();
+        let parsed =
+            parser::parse_source(&path, source, SupportedLanguage::JavaScript, None).unwrap();
         let ext = extract(&path, source, &parsed.tree, SupportedLanguage::JavaScript);
 
         assert_eq!(ext.interfaces.len(), 1);
@@ -640,7 +646,8 @@ app.get('/api/data', (req, res) => {
 
     #[test]
     fn extracts_nestjs_get_route() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 @Controller('articles')
 class ArticlesController {
     @Get()
@@ -648,7 +655,8 @@ class ArticlesController {
         return [];
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/articles");
@@ -656,7 +664,8 @@ class ArticlesController {
 
     #[test]
     fn extracts_nestjs_get_with_subpath() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 @Controller('articles')
 class ArticlesController {
     @Get(':slug')
@@ -664,7 +673,8 @@ class ArticlesController {
         return {};
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/articles/:slug");
@@ -672,7 +682,8 @@ class ArticlesController {
 
     #[test]
     fn extracts_nestjs_post_route() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 @Controller('users')
 class UsersController {
     @Post()
@@ -680,7 +691,8 @@ class UsersController {
         return {};
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Post);
         assert_eq!(ext.interfaces[0].path, "/users");
@@ -688,7 +700,8 @@ class UsersController {
 
     #[test]
     fn detects_nestjs_useguards_on_method() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 @Controller('items')
 class ItemsController {
     @Post()
@@ -697,7 +710,8 @@ class ItemsController {
         return {};
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_some());
         match &ext.interfaces[0].auth {
@@ -708,7 +722,8 @@ class ItemsController {
 
     #[test]
     fn detects_nestjs_useguards_on_class() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 @Controller('admin')
 @UseGuards(AuthGuard('jwt'))
 class AdminController {
@@ -722,7 +737,8 @@ class AdminController {
         return {};
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 2);
         // Class-level UseGuards applies to all methods
         assert!(ext.interfaces.iter().all(|i| i.auth.is_some()));
@@ -730,7 +746,8 @@ class AdminController {
 
     #[test]
     fn nestjs_method_auth_overrides_class() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 @Controller('mixed')
 @UseGuards(AuthGuard('basic'))
 class MixedController {
@@ -740,7 +757,8 @@ class MixedController {
         return {};
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         match &ext.interfaces[0].auth {
             Some(AuthKind::Decorator(s)) => assert!(s.contains("jwt")),
@@ -750,7 +768,8 @@ class MixedController {
 
     #[test]
     fn realistic_nestjs_controller() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 import { Controller, Get, Post, Delete, UseGuards } from '@nestjs/common';
 
 @Controller('api/articles')
@@ -778,9 +797,13 @@ class ArticlesController {
         return {};
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 4, "4 NestJS routes");
-        assert!(ext.interfaces.iter().all(|i| i.auth.is_some()), "all should inherit class auth");
+        assert!(
+            ext.interfaces.iter().all(|i| i.auth.is_some()),
+            "all should inherit class auth"
+        );
         assert_eq!(ext.interfaces[0].path, "/api/articles");
         assert_eq!(ext.interfaces[1].path, "/api/articles/:slug");
         assert!(ext.sinks.len() >= 1, "should detect console.log sinks");
@@ -789,7 +812,8 @@ class ArticlesController {
 
     #[test]
     fn nestjs_coexists_with_express() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 import express from 'express';
 
 const app = express();
@@ -802,15 +826,23 @@ class UsersController {
         return [];
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 2, "1 Express + 1 NestJS");
-        assert!(ext.interfaces.iter().any(|i| i.path == "/health"), "Express route");
-        assert!(ext.interfaces.iter().any(|i| i.path == "/api/users"), "NestJS route");
+        assert!(
+            ext.interfaces.iter().any(|i| i.path == "/health"),
+            "Express route"
+        );
+        assert!(
+            ext.interfaces.iter().any(|i| i.path == "/api/users"),
+            "NestJS route"
+        );
     }
 
     #[test]
     fn realistic_multi_feature_file() {
-        let ext = extract_ts(r#"
+        let ext = extract_ts(
+            r#"
 import express from 'express';
 import { authMiddleware } from './auth';
 
@@ -834,10 +866,23 @@ app.get('/api/users', (req, res) => {
     console.log("Fetching users");
     res.json([]);
 });
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 3);
-        assert!(ext.interfaces.iter().find(|i| i.path == "/health").unwrap().auth.is_none());
-        assert!(ext.interfaces.iter().find(|i| i.path == "/api/payments").unwrap().auth.is_some());
+        assert!(ext
+            .interfaces
+            .iter()
+            .find(|i| i.path == "/health")
+            .unwrap()
+            .auth
+            .is_none());
+        assert!(ext
+            .interfaces
+            .iter()
+            .find(|i| i.path == "/api/payments")
+            .unwrap()
+            .auth
+            .is_some());
         assert_eq!(ext.dependencies.len(), 1);
         assert_eq!(ext.sinks.len(), 3);
         assert!(ext.sinks.iter().any(|s| s.contains_pii));

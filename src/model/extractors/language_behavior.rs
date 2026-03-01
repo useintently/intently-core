@@ -69,13 +69,13 @@ pub trait LanguageBehavior: Send + Sync {
             None => node_text.lines().next().map(|l| l.to_string()),
         };
 
-        let sig = truncated
-            .as_deref()
-            .unwrap_or(node_text)
-            .trim()
-            .to_string();
+        let sig = truncated.as_deref().unwrap_or(node_text).trim().to_string();
 
-        if sig.is_empty() { None } else { Some(sig) }
+        if sig.is_empty() {
+            None
+        } else {
+            Some(sig)
+        }
     }
 
     /// Extract a doc comment above the given node.
@@ -262,10 +262,7 @@ impl LanguageBehavior for GoBehavior {
                     if child.kind() == "parameter_list" {
                         let text = child.utf8_text(source.as_bytes()).ok()?;
                         let cleaned = text.trim_matches(|c| c == '(' || c == ')');
-                        let type_name = cleaned
-                            .split_whitespace()
-                            .last()?
-                            .trim_start_matches('*');
+                        let type_name = cleaned.split_whitespace().last()?.trim_start_matches('*');
                         return Some(type_name.to_string());
                     }
                 }
@@ -296,7 +293,11 @@ impl LanguageBehavior for PhpBehavior {
     }
 
     fn call_node_kinds(&self) -> &[&str] {
-        &["member_call_expression", "function_call_expression", "scoped_call_expression"]
+        &[
+            "member_call_expression",
+            "function_call_expression",
+            "scoped_call_expression",
+        ]
     }
 }
 
@@ -474,7 +475,10 @@ fn extract_name_from_node(node: &Node, source: &str) -> Option<String> {
                 || kind == "property_identifier"
                 || kind == "field_identifier"
             {
-                return child.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
+                return child
+                    .utf8_text(source.as_bytes())
+                    .ok()
+                    .map(|s| s.to_string());
             }
         }
     }
@@ -525,7 +529,10 @@ fn extract_name_child(node: &Node, source: &str) -> Option<String> {
                 || kind == "constant"
                 || kind == "property_identifier"
             {
-                return child.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
+                return child
+                    .utf8_text(source.as_bytes())
+                    .ok()
+                    .map(|s| s.to_string());
             }
         }
     }
@@ -696,10 +703,7 @@ fn extract_hash_comment(node: &Node, source: &str) -> Option<String> {
 
 /// Clean a `/** ... */` block comment.
 fn clean_block_comment(text: &str) -> String {
-    let trimmed = text
-        .trim_start_matches("/**")
-        .trim_end_matches("*/")
-        .trim();
+    let trimmed = text.trim_start_matches("/**").trim_end_matches("*/").trim();
     trimmed
         .lines()
         .map(|line| line.trim().trim_start_matches('*').trim())
@@ -981,7 +985,11 @@ mod tests {
 
     #[test]
     fn factory_maps_generic_languages() {
-        for lang in [SupportedLanguage::C, SupportedLanguage::Cpp, SupportedLanguage::Swift] {
+        for lang in [
+            SupportedLanguage::C,
+            SupportedLanguage::Cpp,
+            SupportedLanguage::Swift,
+        ] {
             let b = behavior_for(lang);
             assert_eq!(b.module_separator(), ".");
             assert!(b.call_node_kinds().contains(&"call_expression"));

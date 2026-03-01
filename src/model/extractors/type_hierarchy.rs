@@ -16,8 +16,8 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::types::{Reference, ReferenceKind, ResolutionMethod};
+use crate::parser::SupportedLanguage;
 
 use super::common::node_text;
 
@@ -648,10 +648,7 @@ mod tests {
 
     #[test]
     fn python_class_inherits_from_parent() {
-        let refs = parse_and_extract(
-            "class Dog(Animal):\n    pass",
-            SupportedLanguage::Python,
-        );
+        let refs = parse_and_extract("class Dog(Animal):\n    pass", SupportedLanguage::Python);
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].source_symbol, "Dog");
         assert_eq!(refs[0].target_symbol, "Animal");
@@ -666,11 +663,18 @@ mod tests {
         );
         assert_eq!(refs.len(), 2);
 
-        let extends_ref = refs.iter().find(|r| r.reference_kind == ReferenceKind::Extends);
-        let implements_ref = refs.iter().find(|r| r.reference_kind == ReferenceKind::Implements);
+        let extends_ref = refs
+            .iter()
+            .find(|r| r.reference_kind == ReferenceKind::Extends);
+        let implements_ref = refs
+            .iter()
+            .find(|r| r.reference_kind == ReferenceKind::Implements);
 
         assert!(extends_ref.is_some(), "should have an Extends reference");
-        assert!(implements_ref.is_some(), "should have an Implements reference");
+        assert!(
+            implements_ref.is_some(),
+            "should have an Implements reference"
+        );
 
         assert_eq!(extends_ref.unwrap().target_symbol, "Animal");
         assert_eq!(implements_ref.unwrap().target_symbol, "Runnable");
@@ -683,13 +687,27 @@ mod tests {
             "public class Dog : Animal, IRunnable { }",
             SupportedLanguage::CSharp,
         );
-        assert!(refs.len() >= 2, "should have at least 2 references, got {}", refs.len());
+        assert!(
+            refs.len() >= 2,
+            "should have at least 2 references, got {}",
+            refs.len()
+        );
 
-        let extends_ref = refs.iter().find(|r| r.reference_kind == ReferenceKind::Extends);
-        let implements_ref = refs.iter().find(|r| r.reference_kind == ReferenceKind::Implements);
+        let extends_ref = refs
+            .iter()
+            .find(|r| r.reference_kind == ReferenceKind::Extends);
+        let implements_ref = refs
+            .iter()
+            .find(|r| r.reference_kind == ReferenceKind::Implements);
 
-        assert!(extends_ref.is_some(), "should have an Extends reference for Animal");
-        assert!(implements_ref.is_some(), "should have an Implements reference for IRunnable");
+        assert!(
+            extends_ref.is_some(),
+            "should have an Extends reference for Animal"
+        );
+        assert!(
+            implements_ref.is_some(),
+            "should have an Implements reference for IRunnable"
+        );
 
         assert_eq!(extends_ref.unwrap().target_symbol, "Animal");
         assert_eq!(implements_ref.unwrap().target_symbol, "IRunnable");
@@ -701,7 +719,11 @@ mod tests {
             "package main\ntype Dog struct {\n    Animal\n    Name string\n}",
             SupportedLanguage::Go,
         );
-        assert_eq!(refs.len(), 1, "only the embedded field (Animal) should produce a reference");
+        assert_eq!(
+            refs.len(),
+            1,
+            "only the embedded field (Animal) should produce a reference"
+        );
         assert_eq!(refs[0].source_symbol, "Dog");
         assert_eq!(refs[0].target_symbol, "Animal");
         assert_eq!(refs[0].reference_kind, ReferenceKind::Extends);
@@ -725,6 +747,9 @@ mod tests {
             "class StandaloneClass { constructor() {} }",
             SupportedLanguage::TypeScript,
         );
-        assert!(refs.is_empty(), "class with no inheritance should return empty");
+        assert!(
+            refs.is_empty(),
+            "class with no inheritance should return empty"
+        );
     }
 }

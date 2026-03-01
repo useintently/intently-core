@@ -36,13 +36,16 @@ intently-core/
 │   │   ├── types.rs        # CodeModel, FileExtraction, Component, Interface, etc.
 │   │   ├── builder.rs      # Incremental model builder (O(1) per-file updates)
 │   │   ├── diff.rs         # Semantic diff between CodeModel states
-│   │   ├── graph.rs        # KnowledgeGraph (petgraph) — impact analysis, cycles
-│   │   ├── import_resolver.rs  # Cross-file import resolution
+│   │   ├── graph.rs        # KnowledgeGraph (petgraph) — impact analysis, cycles, WeightedEdge
+│   │   ├── graph_analysis.rs   # Composable graph analysis (GraphAnalyzer trait, AnalysisPipeline)
+│   │   ├── import_resolver.rs  # Cross-file import resolution with confidence scoring
+│   │   ├── symbol_table.rs     # Two-level symbol table (per-file exact + global fuzzy)
 │   │   ├── module_inference.rs # Module boundary detection
 │   │   ├── patterns.rs     # Shared cross-language patterns
 │   │   └── extractors/     # Per-language semantic extractors
 │   │       ├── mod.rs      # Extractor dispatch by language
 │   │       ├── common.rs   # Shared utilities (node text, PII detection, anchoring)
+│   │       ├── language_behavior.rs # LanguageBehavior trait — per-language conventions
 │   │       ├── typescript.rs   # Express, NestJS
 │   │       ├── python.rs       # FastAPI, Flask, Django
 │   │       ├── java.rs         # Spring Boot (also used for Kotlin)
@@ -51,8 +54,8 @@ intently-core/
 │   │       ├── php.rs          # Laravel
 │   │       ├── ruby.rs         # Rails
 │   │       ├── generic.rs      # Fallback (Rust, C, C++, Swift, Scala)
-│   │       ├── symbols.rs      # Tree-sitter query-based symbol extraction
-│   │       ├── call_graph.rs   # Call site detection per language
+│   │       ├── symbols.rs      # Tree-sitter query-based symbol extraction (via LanguageBehavior)
+│   │       ├── call_graph.rs   # Call site detection per language (via LanguageBehavior)
 │   │       ├── type_hierarchy.rs # extends/implements detection
 │   │       └── data_models.rs  # Struct/class/interface field extraction
 │   └── search/             # ast-grep structural code search
@@ -114,6 +117,10 @@ let extraction: FileExtraction = engine.analyze_single_file(path)?;
 let sources: &HashMap<PathBuf, String> = engine.sources();
 let extractions: &HashMap<PathBuf, FileExtraction> = engine.extractions();
 let graph: Option<&KnowledgeGraph> = engine.graph();
+
+// Graph analysis (after extraction)
+let ctx: Option<AnalysisContext> = engine.run_graph_analysis();
+let ctx: Option<AnalysisContext> = engine.run_custom_analysis(pipeline);
 ```
 
 ### ExtractionResult

@@ -17,9 +17,7 @@ use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 
-use super::types::{
-    CodeModel, DataModelKind, HttpMethod, ReferenceKind, SymbolKind,
-};
+use super::types::{CodeModel, DataModelKind, HttpMethod, ReferenceKind, SymbolKind};
 
 // ---------------------------------------------------------------------------
 // Node types
@@ -80,6 +78,21 @@ impl GraphNode {
             Self::DataModel { file, .. } => Some(file),
             Self::Module { .. } | Self::External { .. } => None,
         }
+    }
+
+    /// Whether this node represents a code symbol (function, class, method, etc.).
+    pub fn is_symbol(&self) -> bool {
+        matches!(self, Self::Symbol { .. })
+    }
+
+    /// Whether this node represents an HTTP endpoint.
+    pub fn is_interface(&self) -> bool {
+        matches!(self, Self::Interface { .. })
+    }
+
+    /// Whether this node represents an external/unresolved dependency.
+    pub fn is_external(&self) -> bool {
+        matches!(self, Self::External { .. })
     }
 
     /// The node type as a string for stats grouping.
@@ -184,7 +197,7 @@ impl WeightedEdge {
 enum NodeKey {
     File(PathBuf),
     Symbol(String, PathBuf),
-    Interface(String, String, PathBuf),   // method+path+file
+    Interface(String, String, PathBuf), // method+path+file
     DataModel(String, PathBuf),
     Module(String),
     External(String),
@@ -300,26 +313,27 @@ impl KnowledgeGraph {
         for component in &model.components {
             // Step 1: Module nodes
             for module in &component.module_boundaries {
-                kg.ensure_node(NodeKey::Module(module.name.clone()), || {
-                    GraphNode::Module { name: module.name.clone() }
+                kg.ensure_node(NodeKey::Module(module.name.clone()), || GraphNode::Module {
+                    name: module.name.clone(),
                 });
             }
 
             // Step 2: File nodes from modules
             for module in &component.module_boundaries {
                 for file in &module.files {
-                    kg.ensure_node(NodeKey::File(file.clone()), || {
-                        GraphNode::File { path: file.clone() }
+                    kg.ensure_node(NodeKey::File(file.clone()), || GraphNode::File {
+                        path: file.clone(),
                     });
                 }
             }
 
             // Step 3: Symbol nodes + Defines edges
             for symbol in &component.symbols {
-                let file_idx = kg.ensure_node(
-                    NodeKey::File(symbol.anchor.file.clone()),
-                    || GraphNode::File { path: symbol.anchor.file.clone() },
-                );
+                let file_idx = kg.ensure_node(NodeKey::File(symbol.anchor.file.clone()), || {
+                    GraphNode::File {
+                        path: symbol.anchor.file.clone(),
+                    }
+                });
                 let sym_idx = kg.ensure_node(
                     NodeKey::Symbol(symbol.name.clone(), symbol.anchor.file.clone()),
                     || GraphNode::Symbol {
@@ -329,15 +343,20 @@ impl KnowledgeGraph {
                         line: symbol.anchor.line,
                     },
                 );
-                kg.graph.add_edge(file_idx, sym_idx, WeightedEdge::structural(GraphEdge::Defines));
+                kg.graph.add_edge(
+                    file_idx,
+                    sym_idx,
+                    WeightedEdge::structural(GraphEdge::Defines),
+                );
             }
 
             // Step 4: Interface nodes + Defines edges
             for iface in &component.interfaces {
-                let file_idx = kg.ensure_node(
-                    NodeKey::File(iface.anchor.file.clone()),
-                    || GraphNode::File { path: iface.anchor.file.clone() },
-                );
+                let file_idx = kg.ensure_node(NodeKey::File(iface.anchor.file.clone()), || {
+                    GraphNode::File {
+                        path: iface.anchor.file.clone(),
+                    }
+                });
                 let iface_idx = kg.ensure_node(
                     NodeKey::Interface(
                         iface.method.to_string(),
@@ -351,15 +370,20 @@ impl KnowledgeGraph {
                         line: iface.anchor.line,
                     },
                 );
-                kg.graph.add_edge(file_idx, iface_idx, WeightedEdge::structural(GraphEdge::Defines));
+                kg.graph.add_edge(
+                    file_idx,
+                    iface_idx,
+                    WeightedEdge::structural(GraphEdge::Defines),
+                );
             }
 
             // Step 5: DataModel nodes + Defines edges
             for model in &component.data_models {
-                let file_idx = kg.ensure_node(
-                    NodeKey::File(model.anchor.file.clone()),
-                    || GraphNode::File { path: model.anchor.file.clone() },
-                );
+                let file_idx = kg.ensure_node(NodeKey::File(model.anchor.file.clone()), || {
+                    GraphNode::File {
+                        path: model.anchor.file.clone(),
+                    }
+                });
                 let model_idx = kg.ensure_node(
                     NodeKey::DataModel(model.name.clone(), model.anchor.file.clone()),
                     || GraphNode::DataModel {
@@ -369,7 +393,11 @@ impl KnowledgeGraph {
                         line: model.anchor.line,
                     },
                 );
-                kg.graph.add_edge(file_idx, model_idx, WeightedEdge::structural(GraphEdge::Defines));
+                kg.graph.add_edge(
+                    file_idx,
+                    model_idx,
+                    WeightedEdge::structural(GraphEdge::Defines),
+                );
             }
 
             // Step 6: Process References
@@ -389,7 +417,11 @@ impl KnowledgeGraph {
                             ),
                             None => kg.ensure_external(&reference.target_symbol),
                         };
-                        kg.graph.add_edge(source_idx, target_idx, GraphEdge::Calls);
+                        kg.graph.add_edge(
+                            source_idx,
+                            target_idx,
+                            WeightedEdge::from_reference(GraphEdge::Calls, reference.confidence),
+                        );
                     }
                     ReferenceKind::Extends => {
                         let source_idx = kg.ensure_symbol(
@@ -405,7 +437,11 @@ impl KnowledgeGraph {
                             ),
                             None => kg.ensure_external(&reference.target_symbol),
                         };
-                        kg.graph.add_edge(source_idx, target_idx, GraphEdge::Extends);
+                        kg.graph.add_edge(
+                            source_idx,
+                            target_idx,
+                            WeightedEdge::from_reference(GraphEdge::Extends, reference.confidence),
+                        );
                     }
                     ReferenceKind::Implements => {
                         let source_idx = kg.ensure_symbol(
@@ -421,7 +457,14 @@ impl KnowledgeGraph {
                             ),
                             None => kg.ensure_external(&reference.target_symbol),
                         };
-                        kg.graph.add_edge(source_idx, target_idx, GraphEdge::Implements);
+                        kg.graph.add_edge(
+                            source_idx,
+                            target_idx,
+                            WeightedEdge::from_reference(
+                                GraphEdge::Implements,
+                                reference.confidence,
+                            ),
+                        );
                     }
                     ReferenceKind::TypeUsage => {
                         let source_idx = kg.ensure_symbol(
@@ -437,21 +480,30 @@ impl KnowledgeGraph {
                             ),
                             None => kg.ensure_external(&reference.target_symbol),
                         };
-                        kg.graph.add_edge(source_idx, target_idx, GraphEdge::UsesType);
+                        kg.graph.add_edge(
+                            source_idx,
+                            target_idx,
+                            WeightedEdge::from_reference(GraphEdge::UsesType, reference.confidence),
+                        );
                     }
                     ReferenceKind::Import => {
-                        let source_file_idx = kg.ensure_node(
-                            NodeKey::File(reference.source_file.clone()),
-                            || GraphNode::File { path: reference.source_file.clone() },
-                        );
+                        let source_file_idx =
+                            kg.ensure_node(NodeKey::File(reference.source_file.clone()), || {
+                                GraphNode::File {
+                                    path: reference.source_file.clone(),
+                                }
+                            });
                         let target_idx = match &reference.target_file {
-                            Some(tf) => kg.ensure_node(
-                                NodeKey::File(tf.clone()),
-                                || GraphNode::File { path: tf.clone() },
-                            ),
+                            Some(tf) => kg.ensure_node(NodeKey::File(tf.clone()), || {
+                                GraphNode::File { path: tf.clone() }
+                            }),
                             None => kg.ensure_external(&reference.target_symbol),
                         };
-                        kg.graph.add_edge(source_file_idx, target_idx, GraphEdge::Imports);
+                        kg.graph.add_edge(
+                            source_file_idx,
+                            target_idx,
+                            WeightedEdge::from_reference(GraphEdge::Imports, reference.confidence),
+                        );
                     }
                 }
             }
@@ -463,7 +515,11 @@ impl KnowledgeGraph {
                 // Contains: module → file
                 for file in &module.files {
                     if let Some(&file_idx) = kg.node_index.get(&NodeKey::File(file.clone())) {
-                        kg.graph.add_edge(module_idx, file_idx, GraphEdge::Contains);
+                        kg.graph.add_edge(
+                            module_idx,
+                            file_idx,
+                            WeightedEdge::structural(GraphEdge::Contains),
+                        );
                     }
                 }
 
@@ -473,7 +529,11 @@ impl KnowledgeGraph {
                     for file in &module.files {
                         let key = NodeKey::Symbol(sym_name.clone(), file.clone());
                         if let Some(&sym_idx) = kg.node_index.get(&key) {
-                            kg.graph.add_edge(module_idx, sym_idx, GraphEdge::Exposes);
+                            kg.graph.add_edge(
+                                module_idx,
+                                sym_idx,
+                                WeightedEdge::structural(GraphEdge::Exposes),
+                            );
                             break;
                         }
                     }
@@ -481,11 +541,15 @@ impl KnowledgeGraph {
 
                 // DependsOn: module → module
                 for dep_name in &module.depends_on {
-                    let dep_idx = kg.ensure_node(
-                        NodeKey::Module(dep_name.clone()),
-                        || GraphNode::Module { name: dep_name.clone() },
+                    let dep_idx =
+                        kg.ensure_node(NodeKey::Module(dep_name.clone()), || GraphNode::Module {
+                            name: dep_name.clone(),
+                        });
+                    kg.graph.add_edge(
+                        module_idx,
+                        dep_idx,
+                        WeightedEdge::structural(GraphEdge::DependsOn),
                     );
-                    kg.graph.add_edge(module_idx, dep_idx, GraphEdge::DependsOn);
                 }
             }
         }
@@ -527,6 +591,12 @@ impl KnowledgeGraph {
     /// Multi-edge-type BFS: traverses Calls (incoming), Extends, Implements,
     /// and UsesType edges to find everything that could break if this symbol
     /// changes.
+    /// Minimum cumulative confidence for a path to be included in impact analysis.
+    ///
+    /// Paths where the product of edge confidences drops below this threshold
+    /// are pruned, reducing noise from chains of heuristic resolutions.
+    const IMPACT_CONFIDENCE_THRESHOLD: f64 = 0.1;
+
     pub fn impact_analysis(&self, symbol_name: &str, max_depth: usize) -> ImpactResult {
         let start_indices = self.find_symbol_nodes(symbol_name);
         if start_indices.is_empty() {
@@ -546,37 +616,48 @@ impl KnowledgeGraph {
             GraphEdge::UsesType,
         ];
 
+        // BFS queue carries (node_index, depth, cumulative_confidence)
         let mut visited: HashMap<NodeIndex, bool> = HashMap::new();
-        let mut queue: std::collections::VecDeque<(NodeIndex, usize)> =
+        let mut queue: std::collections::VecDeque<(NodeIndex, usize, f64)> =
             std::collections::VecDeque::new();
         let mut affected: Vec<AffectedNode> = Vec::new();
 
         for &idx in &start_indices {
             visited.insert(idx, true);
-            queue.push_back((idx, 0));
+            queue.push_back((idx, 0, 1.0));
         }
 
-        while let Some((current, depth)) = queue.pop_front() {
+        while let Some((current, depth, cumulative_conf)) = queue.pop_front() {
             if depth >= max_depth {
                 continue;
             }
 
             // Check incoming edges (who depends on this node?)
             for edge in self.graph.edges_directed(current, Direction::Incoming) {
-                if !impact_edges.contains(edge.weight()) {
+                if !impact_edges.contains(&edge.weight().kind) {
                     continue;
                 }
                 let neighbor = edge.source();
                 if visited.contains_key(&neighbor) {
                     continue;
                 }
+
+                // Accumulate confidence along the path
+                let path_confidence = cumulative_conf * edge.weight().confidence;
+
+                // Prune low-confidence paths
+                if path_confidence < Self::IMPACT_CONFIDENCE_THRESHOLD {
+                    continue;
+                }
+
                 visited.insert(neighbor, true);
                 affected.push(AffectedNode {
                     node: self.graph[neighbor].clone(),
                     depth: depth + 1,
-                    edge_type: edge.weight().clone(),
+                    edge_type: edge.weight().kind.clone(),
+                    confidence: path_confidence,
                 });
-                queue.push_back((neighbor, depth + 1));
+                queue.push_back((neighbor, depth + 1, path_confidence));
             }
         }
 
@@ -629,12 +710,7 @@ impl KnowledgeGraph {
         }
 
         if direction == HierarchyDirection::Descendants || direction == HierarchyDirection::Both {
-            results.extend(self.bfs_by_edge(
-                type_name,
-                10,
-                Direction::Incoming,
-                &hierarchy_edges,
-            ));
+            results.extend(self.bfs_by_edge(type_name, 10, Direction::Incoming, &hierarchy_edges));
         }
 
         results
@@ -676,7 +752,7 @@ impl KnowledgeGraph {
     /// Tarjan's SCC. More focused than `find_cycles()` for ARC-001.
     pub fn find_module_cycles(&self) -> Vec<Cycle> {
         // Build a subgraph of only Module nodes and DependsOn edges
-        let mut sub = DiGraph::<GraphNode, GraphEdge>::new();
+        let mut sub = DiGraph::<GraphNode, WeightedEdge>::new();
         let mut sub_index: HashMap<NodeIndex, NodeIndex> = HashMap::new();
 
         for idx in self.graph.node_indices() {
@@ -687,11 +763,11 @@ impl KnowledgeGraph {
         }
 
         for edge in self.graph.edge_references() {
-            if *edge.weight() == GraphEdge::DependsOn {
+            if edge.weight().kind == GraphEdge::DependsOn {
                 if let (Some(&src), Some(&tgt)) =
                     (sub_index.get(&edge.source()), sub_index.get(&edge.target()))
                 {
-                    sub.add_edge(src, tgt, GraphEdge::DependsOn);
+                    sub.add_edge(src, tgt, WeightedEdge::structural(GraphEdge::DependsOn));
                 }
             }
         }
@@ -700,8 +776,7 @@ impl KnowledgeGraph {
         sccs.into_iter()
             .filter(|scc| scc.len() > 1)
             .map(|scc| {
-                let nodes: Vec<GraphNode> =
-                    scc.iter().map(|&idx| sub[idx].clone()).collect();
+                let nodes: Vec<GraphNode> = scc.iter().map(|&idx| sub[idx].clone()).collect();
                 let modules: Vec<String> = nodes
                     .iter()
                     .filter_map(|n| {
@@ -729,7 +804,7 @@ impl KnowledgeGraph {
         let mut edge_counts: HashMap<String, usize> = HashMap::new();
         for edge in self.graph.edge_references() {
             *edge_counts
-                .entry(edge.weight().type_name().to_string())
+                .entry(edge.weight().kind.type_name().to_string())
                 .or_default() += 1;
         }
 
@@ -770,7 +845,8 @@ impl KnowledgeGraph {
                 serde_json::json!({
                     "source": edge.source().index(),
                     "target": edge.target().index(),
-                    "type": edge.weight().type_name(),
+                    "type": edge.weight().kind.type_name(),
+                    "confidence": edge.weight().confidence,
                 })
             })
             .collect();
@@ -792,15 +868,54 @@ impl KnowledgeGraph {
     }
 
     // -----------------------------------------------------------------------
+    // Crate-internal accessors for graph_analysis
+    // -----------------------------------------------------------------------
+
+    /// Iterate over all (node_index, node) pairs.
+    pub(crate) fn node_iter(&self) -> impl Iterator<Item = (NodeIndex, &GraphNode)> {
+        self.graph
+            .node_indices()
+            .map(move |idx| (idx, &self.graph[idx]))
+    }
+
+    /// Get the in-degree and out-degree of a node.
+    pub(crate) fn node_degree(&self, idx: NodeIndex) -> (usize, usize) {
+        let in_deg = self.graph.edges_directed(idx, Direction::Incoming).count();
+        let out_deg = self.graph.edges_directed(idx, Direction::Outgoing).count();
+        (in_deg, out_deg)
+    }
+
+    /// Get a node by index.
+    pub(crate) fn node(&self, idx: NodeIndex) -> &GraphNode {
+        &self.graph[idx]
+    }
+
+    /// Iterate over edges from a node, filtered by edge kind.
+    pub(crate) fn edges_filtered(
+        &self,
+        idx: NodeIndex,
+        direction: Direction,
+        kinds: &[GraphEdge],
+    ) -> Vec<(NodeIndex, &WeightedEdge)> {
+        self.graph
+            .edges_directed(idx, direction)
+            .filter(|e| kinds.contains(&e.weight().kind))
+            .map(|e| {
+                let neighbor = match direction {
+                    Direction::Outgoing => e.target(),
+                    Direction::Incoming => e.source(),
+                };
+                (neighbor, e.weight())
+            })
+            .collect()
+    }
+
+    // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
 
     /// Get or create a node, returning its index.
-    fn ensure_node(
-        &mut self,
-        key: NodeKey,
-        make_node: impl FnOnce() -> GraphNode,
-    ) -> NodeIndex {
+    fn ensure_node(&mut self, key: NodeKey, make_node: impl FnOnce() -> GraphNode) -> NodeIndex {
         if let Some(&idx) = self.node_index.get(&key) {
             return idx;
         }
@@ -811,12 +926,7 @@ impl KnowledgeGraph {
     }
 
     /// Get or create a Symbol node.
-    fn ensure_symbol(
-        &mut self,
-        name: &str,
-        file: &Path,
-        line: usize,
-    ) -> NodeIndex {
+    fn ensure_symbol(&mut self, name: &str, file: &Path, line: usize) -> NodeIndex {
         self.ensure_node(
             NodeKey::Symbol(name.to_string(), file.to_path_buf()),
             || GraphNode::Symbol {
@@ -831,7 +941,9 @@ impl KnowledgeGraph {
     /// Get or create an External node.
     fn ensure_external(&mut self, name: &str) -> NodeIndex {
         self.ensure_node(NodeKey::External(name.to_string()), || {
-            GraphNode::External { name: name.to_string() }
+            GraphNode::External {
+                name: name.to_string(),
+            }
         })
     }
 
@@ -875,7 +987,7 @@ impl KnowledgeGraph {
             }
 
             for edge in self.graph.edges_directed(current, direction) {
-                if !edge_types.contains(edge.weight()) {
+                if !edge_types.contains(&edge.weight().kind) {
                     continue;
                 }
                 let neighbor = match direction {
@@ -901,8 +1013,8 @@ impl KnowledgeGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::SupportedLanguage;
     use crate::model::types::*;
+    use crate::parser::SupportedLanguage;
 
     /// Build a minimal code model for testing graph construction.
     fn make_test_model() -> CodeModel {
@@ -925,7 +1037,9 @@ mod tests {
                         name: "handler".into(),
                         kind: SymbolKind::Function,
                         anchor: SourceAnchor::from_line_range(
-                            PathBuf::from("src/routes.ts"), 5, 20,
+                            PathBuf::from("src/routes.ts"),
+                            5,
+                            20,
                         ),
                         doc: None,
                         signature: None,
@@ -936,7 +1050,9 @@ mod tests {
                         name: "getUser".into(),
                         kind: SymbolKind::Method,
                         anchor: SourceAnchor::from_line_range(
-                            PathBuf::from("src/services.ts"), 10, 30,
+                            PathBuf::from("src/services.ts"),
+                            10,
+                            30,
                         ),
                         doc: None,
                         signature: None,
@@ -946,9 +1062,7 @@ mod tests {
                     Symbol {
                         name: "validate".into(),
                         kind: SymbolKind::Function,
-                        anchor: SourceAnchor::from_line_range(
-                            PathBuf::from("src/utils.ts"), 1, 10,
-                        ),
+                        anchor: SourceAnchor::from_line_range(PathBuf::from("src/utils.ts"), 1, 10),
                         doc: None,
                         signature: None,
                         visibility: None,
@@ -966,8 +1080,8 @@ mod tests {
                         target_file: Some(PathBuf::from("src/services.ts")),
                         target_line: Some(10),
                         reference_kind: ReferenceKind::Call,
-                        confidence: 0.0,
-                        resolution_method: ResolutionMethod::Unresolved,
+                        confidence: 0.95,
+                        resolution_method: ResolutionMethod::ImportBased,
                     },
                     Reference {
                         source_symbol: "getUser".into(),
@@ -977,8 +1091,8 @@ mod tests {
                         target_file: Some(PathBuf::from("src/utils.ts")),
                         target_line: Some(1),
                         reference_kind: ReferenceKind::Call,
-                        confidence: 0.0,
-                        resolution_method: ResolutionMethod::Unresolved,
+                        confidence: 0.90,
+                        resolution_method: ResolutionMethod::SameFile,
                     },
                     // External call
                     Reference {
@@ -1001,8 +1115,8 @@ mod tests {
                         target_file: Some(PathBuf::from("src/services.ts")),
                         target_line: Some(1),
                         reference_kind: ReferenceKind::Extends,
-                        confidence: 0.0,
-                        resolution_method: ResolutionMethod::Unresolved,
+                        confidence: 0.80,
+                        resolution_method: ResolutionMethod::GlobalUnique,
                     },
                     // Import
                     Reference {
@@ -1013,8 +1127,8 @@ mod tests {
                         target_file: Some(PathBuf::from("src/services.ts")),
                         target_line: Some(1),
                         reference_kind: ReferenceKind::Import,
-                        confidence: 0.0,
-                        resolution_method: ResolutionMethod::Unresolved,
+                        confidence: 0.95,
+                        resolution_method: ResolutionMethod::ImportBased,
                     },
                 ],
                 data_models: vec![DataModel {
@@ -1026,9 +1140,7 @@ mod tests {
                         line: 3,
                         visibility: Some(Visibility::Public),
                     }],
-                    anchor: SourceAnchor::from_line_range(
-                        PathBuf::from("src/models.ts"), 1, 10,
-                    ),
+                    anchor: SourceAnchor::from_line_range(PathBuf::from("src/models.ts"), 1, 10),
                     parent_type: None,
                     implemented_interfaces: vec![],
                 }],
@@ -1129,7 +1241,11 @@ mod tests {
 
         // getUser appears in two references as source, but should be one node
         let getuser_nodes = kg.find_symbol_nodes("getUser");
-        assert_eq!(getuser_nodes.len(), 1, "getUser should be deduplicated to one node");
+        assert_eq!(
+            getuser_nodes.len(),
+            1,
+            "getUser should be deduplicated to one node"
+        );
     }
 
     #[test]
@@ -1195,7 +1311,9 @@ mod tests {
         let callers = kg.callers("getUser", 1);
         assert!(!callers.is_empty(), "getUser should have callers");
         assert!(
-            callers.iter().any(|e| matches!(&e.node, GraphNode::Symbol { name, .. } if name == "handler")),
+            callers
+                .iter()
+                .any(|e| matches!(&e.node, GraphNode::Symbol { name, .. } if name == "handler")),
             "handler should be a caller of getUser"
         );
     }
@@ -1214,8 +1332,14 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(names.contains(&"getUser".to_string()), "getUser should be a transitive caller");
-        assert!(names.contains(&"handler".to_string()), "handler should be a transitive caller");
+        assert!(
+            names.contains(&"getUser".to_string()),
+            "getUser should be a transitive caller"
+        );
+        assert!(
+            names.contains(&"handler".to_string()),
+            "handler should be a transitive caller"
+        );
     }
 
     #[test]
@@ -1225,7 +1349,10 @@ mod tests {
 
         let callers = kg.callers("validate", 1);
         // At depth 1, only getUser should be found (direct caller)
-        assert!(callers.iter().all(|e| e.depth == 1), "depth-1 results should all be at depth 1");
+        assert!(
+            callers.iter().all(|e| e.depth == 1),
+            "depth-1 results should all be at depth 1"
+        );
     }
 
     #[test]
@@ -1246,7 +1373,9 @@ mod tests {
 
         let callees = kg.callees("handler", 1);
         assert!(
-            callees.iter().any(|e| matches!(&e.node, GraphNode::Symbol { name, .. } if name == "getUser")),
+            callees
+                .iter()
+                .any(|e| matches!(&e.node, GraphNode::Symbol { name, .. } if name == "getUser")),
             "getUser should be a callee of handler"
         );
     }
@@ -1267,7 +1396,10 @@ mod tests {
             .collect();
         assert!(names.contains(&"getUser".to_string()));
         assert!(names.contains(&"validate".to_string()));
-        assert!(names.contains(&"axios.get".to_string()), "should reach external callees");
+        assert!(
+            names.contains(&"axios.get".to_string()),
+            "should reach external callees"
+        );
     }
 
     // --- Impact analysis tests ---
@@ -1283,7 +1415,10 @@ mod tests {
             "changing getUser should affect something"
         );
         assert!(
-            impact.affected_nodes.iter().any(|a| matches!(&a.node, GraphNode::Symbol { name, .. } if name == "handler")),
+            impact
+                .affected_nodes
+                .iter()
+                .any(|a| matches!(&a.node, GraphNode::Symbol { name, .. } if name == "handler")),
             "handler should be affected (it calls getUser)"
         );
     }
@@ -1318,7 +1453,9 @@ mod tests {
 
         let ancestors = kg.type_hierarchy("AdminService", HierarchyDirection::Ancestors);
         assert!(
-            ancestors.iter().any(|e| matches!(&e.node, GraphNode::Symbol { name, .. } if name == "UserService")),
+            ancestors.iter().any(
+                |e| matches!(&e.node, GraphNode::Symbol { name, .. } if name == "UserService")
+            ),
             "UserService should be an ancestor of AdminService"
         );
     }
@@ -1330,7 +1467,9 @@ mod tests {
 
         let descendants = kg.type_hierarchy("UserService", HierarchyDirection::Descendants);
         assert!(
-            descendants.iter().any(|e| matches!(&e.node, GraphNode::Symbol { name, .. } if name == "AdminService")),
+            descendants.iter().any(
+                |e| matches!(&e.node, GraphNode::Symbol { name, .. } if name == "AdminService")
+            ),
             "AdminService should be a descendant of UserService"
         );
     }
@@ -1342,7 +1481,10 @@ mod tests {
 
         let both = kg.type_hierarchy("UserService", HierarchyDirection::Both);
         // Should find ancestors and descendants
-        assert!(!both.is_empty(), "UserService should have hierarchy entries");
+        assert!(
+            !both.is_empty(),
+            "UserService should have hierarchy entries"
+        );
     }
 
     // --- Cycle detection tests ---
@@ -1594,7 +1736,10 @@ mod tests {
         let callers = kg.callers("fibonacci", 5);
         // Self-call: fibonacci calls fibonacci, but visited set prevents infinite loop
         // The callers of fibonacci include fibonacci itself
-        assert!(callers.len() <= 1, "should handle self-reference without infinite loop");
+        assert!(
+            callers.len() <= 1,
+            "should handle self-reference without infinite loop"
+        );
     }
 
     #[test]
@@ -1619,5 +1764,186 @@ mod tests {
             stats.edge_counts.get("imports").copied().unwrap_or(0) > 0,
             "should have imports edges"
         );
+    }
+
+    // --- Confidence tests ---
+
+    #[test]
+    fn weighted_edge_structural_has_full_confidence() {
+        let edge = WeightedEdge::structural(GraphEdge::Defines);
+        assert_eq!(edge.confidence, 1.0);
+        assert_eq!(edge.kind, GraphEdge::Defines);
+    }
+
+    #[test]
+    fn weighted_edge_from_reference_carries_confidence() {
+        let edge = WeightedEdge::from_reference(GraphEdge::Calls, 0.85);
+        assert_eq!(edge.confidence, 0.85);
+        assert_eq!(edge.kind, GraphEdge::Calls);
+    }
+
+    #[test]
+    fn impact_filters_low_confidence() {
+        // Build a model where A calls B (high confidence) and B calls C (very low confidence).
+        // Impact of C should reach B but NOT A, because cumulative confidence drops below threshold.
+        let model = CodeModel {
+            version: "1.0".into(),
+            project_name: "low-conf".into(),
+            components: vec![Component {
+                name: "low-conf".into(),
+                language: SupportedLanguage::TypeScript,
+                interfaces: vec![],
+                dependencies: vec![],
+                sinks: vec![],
+                symbols: vec![
+                    Symbol {
+                        name: "funcA".into(),
+                        kind: SymbolKind::Function,
+                        anchor: SourceAnchor::from_line(PathBuf::from("a.ts"), 1),
+                        doc: None,
+                        signature: None,
+                        visibility: None,
+                        parent: None,
+                    },
+                    Symbol {
+                        name: "funcB".into(),
+                        kind: SymbolKind::Function,
+                        anchor: SourceAnchor::from_line(PathBuf::from("b.ts"), 1),
+                        doc: None,
+                        signature: None,
+                        visibility: None,
+                        parent: None,
+                    },
+                    Symbol {
+                        name: "funcC".into(),
+                        kind: SymbolKind::Function,
+                        anchor: SourceAnchor::from_line(PathBuf::from("c.ts"), 1),
+                        doc: None,
+                        signature: None,
+                        visibility: None,
+                        parent: None,
+                    },
+                ],
+                imports: vec![],
+                references: vec![
+                    Reference {
+                        source_symbol: "funcA".into(),
+                        source_file: PathBuf::from("a.ts"),
+                        source_line: 5,
+                        target_symbol: "funcB".into(),
+                        target_file: Some(PathBuf::from("b.ts")),
+                        target_line: Some(1),
+                        reference_kind: ReferenceKind::Call,
+                        confidence: 0.05, // very low — below threshold
+                        resolution_method: ResolutionMethod::GlobalAmbiguous,
+                    },
+                    Reference {
+                        source_symbol: "funcB".into(),
+                        source_file: PathBuf::from("b.ts"),
+                        source_line: 5,
+                        target_symbol: "funcC".into(),
+                        target_file: Some(PathBuf::from("c.ts")),
+                        target_line: Some(1),
+                        reference_kind: ReferenceKind::Call,
+                        confidence: 0.90,
+                        resolution_method: ResolutionMethod::SameFile,
+                    },
+                ],
+                data_models: vec![],
+                module_boundaries: vec![],
+            }],
+            stats: CodeModelStats {
+                files_analyzed: 3,
+                total_interfaces: 0,
+                total_dependencies: 0,
+                total_sinks: 0,
+                total_symbols: 3,
+                total_imports: 0,
+                total_references: 2,
+                total_data_models: 0,
+                total_modules: 0,
+                resolved_references: 1,
+                avg_resolution_confidence: 0.475,
+            },
+        };
+
+        let kg = KnowledgeGraph::from_code_model(&model);
+        let impact = kg.impact_analysis("funcC", 5);
+
+        // funcB calls funcC with 0.90 confidence — should appear
+        assert!(
+            impact
+                .affected_nodes
+                .iter()
+                .any(|a| { matches!(&a.node, GraphNode::Symbol { name, .. } if name == "funcB") }),
+            "funcB should be affected (high confidence call to funcC)"
+        );
+
+        // funcA calls funcB with 0.05 confidence — cumulative = 0.90 * 0.05 = 0.045 < 0.1
+        assert!(
+            !impact
+                .affected_nodes
+                .iter()
+                .any(|a| { matches!(&a.node, GraphNode::Symbol { name, .. } if name == "funcA") }),
+            "funcA should be pruned (cumulative confidence below threshold)"
+        );
+    }
+
+    #[test]
+    fn impact_cumulative_confidence() {
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
+
+        // In the test model: handler calls getUser (0.95), getUser calls validate (0.90)
+        // Impact of validate: getUser (conf=0.90), handler (conf=0.90*0.95=0.855)
+        let impact = kg.impact_analysis("validate", 5);
+        assert!(impact.total_affected > 0);
+
+        // All affected nodes should have confidence > 0
+        for node in &impact.affected_nodes {
+            assert!(
+                node.confidence > 0.0,
+                "affected node {:?} should have positive confidence",
+                node.node.display_name()
+            );
+        }
+
+        // handler's cumulative confidence should be less than getUser's
+        let handler_conf = impact
+            .affected_nodes
+            .iter()
+            .find(|a| matches!(&a.node, GraphNode::Symbol { name, .. } if name == "handler"))
+            .map(|a| a.confidence);
+        let getuser_conf = impact
+            .affected_nodes
+            .iter()
+            .find(|a| matches!(&a.node, GraphNode::Symbol { name, .. } if name == "getUser"))
+            .map(|a| a.confidence);
+
+        if let (Some(h), Some(g)) = (handler_conf, getuser_conf) {
+            assert!(
+                h < g,
+                "handler confidence ({h}) should be less than getUser confidence ({g})"
+            );
+        }
+    }
+
+    #[test]
+    fn to_json_includes_edge_confidence() {
+        let model = make_test_model();
+        let kg = KnowledgeGraph::from_code_model(&model);
+
+        let json = kg.to_json();
+        let edges = json["edges"].as_array().unwrap();
+
+        // Every edge should have a "confidence" field
+        for edge in edges {
+            assert!(
+                edge.get("confidence").is_some(),
+                "edge should have confidence field"
+            );
+            let conf = edge["confidence"].as_f64().unwrap();
+            assert!(conf >= 0.0 && conf <= 1.0, "confidence should be in [0, 1]");
+        }
     }
 }

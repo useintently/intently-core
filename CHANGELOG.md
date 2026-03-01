@@ -146,5 +146,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - C# `record` types now detected in symbol extraction — previously returned 0 symbols for modern C# files (ADR-001 GAP-04)
 - Health scores no longer show 100% when extraction fails completely — `confidence` field reveals extraction quality (ADR-001 GAP-06)
 
+### Added (Open Source Learnings)
+- `ResolutionMethod` enum on `Reference` with 5 variants: `ImportBased`, `SameFile`, `GlobalUnique`, `GlobalAmbiguous`, `Unresolved` — enables consumers to filter by resolution quality
+- `confidence: f64` field on `Reference` (0.0–1.0) scoring how reliably the target was resolved
+- `WeightedEdge` type wrapping `GraphEdge` with confidence — structural edges get 1.0, reference-derived edges inherit resolver confidence
+- Confidence-weighted impact analysis: BFS accumulates cumulative confidence along paths, pruning below 0.1 threshold
+- Two-level `SymbolTable`: per-file exact lookup + global fuzzy lookup with 6-level heuristic resolution chain (import→same-file→global-unique→same-directory→ambiguous→unresolved)
+- `LanguageBehavior` trait with 9 language-family implementations — replaces scattered `match language` blocks for visibility, signatures, doc comments, and parent resolution
+- Composable graph analysis pipeline: `GraphAnalyzer` trait + `AnalysisPipeline` with 4 standard passes
+- `DegreeCentralityAnalyzer`: per-node in/out degree computation sorted by out-degree
+- `EntryPointDetector`: 3-strategy detection — HTTP endpoints, high fan-out/low fan-in ratio, name patterns (main, handler, controller, etc.)
+- `ProcessFlowDetector`: DFS traces from entry points through Calls edges with max depth 15, cycle-safe via visited set, flow deduplication
+- `CycleAnalyzer`: wraps `KnowledgeGraph::find_cycles()` into composable analyzer trait
+- `run_graph_analysis()` and `run_custom_analysis()` methods on `IntentlyEngine` for standard and custom analysis pipelines
+- Chunked parallel extraction in engine: files processed in batches of 500 to bound peak memory
+- Thread-local parser caches: `parse_source_cached()` reuses tree-sitter `Parser` instances per rayon thread
+- Tracing sub-spans for pipeline phases: `discover_files`, `parse_and_extract`, `build_model`, `build_graph`
+- Atomic state updates in `CodeModelBuilder`: `update_file()` with closure-based load-modify-save preserving previous state on error
+- Zero-copy string utilities: `node_text_ref()` and `strip_quotes_ref()` in extractors — 30 call sites migrated to avoid unnecessary String allocations
+- `CodeModelStats::default()` derives `Default` for zero-valued construction
+- `resolved_references` and `avg_resolution_confidence` fields on `CodeModelStats`
+- `GraphNode` helper methods: `is_symbol()`, `is_interface()`, `is_external()`
+- `KnowledgeGraph` pub(crate) accessors: `node_iter()`, `node_degree()`, `node()`, `edges_filtered()`
+- Integration test: `express_ecommerce_graph_analysis_pipeline` validating full analysis pipeline
+- 65 new tests across all new modules (from 330 to 417 total: 395 unit + 22 integration)
+
+### Changed (Open Source Learnings)
+- `KnowledgeGraph` internal edge type changed from `DiGraph<GraphNode, GraphEdge>` to `DiGraph<GraphNode, WeightedEdge>` — structural edges carry confidence 1.0, reference-derived edges inherit from resolver
+- `AffectedNode` now includes `confidence: f64` field (cumulative path confidence)
+- `Reference` derives `PartialEq` only (not `Eq`) due to `f64` confidence field
+- `symbols.rs` refactored from ~450 lines of `match language` blocks to `LanguageBehavior` trait dispatch (~300 lines removed)
+- `call_graph.rs` and `generic.rs` use `LanguageBehavior::call_node_kinds()` instead of deprecated `is_call_node()`
+- `is_call_node()` in `common.rs` marked `#[deprecated]` — use `LanguageBehavior::call_node_kinds()` instead
+- `import_resolver.rs` extended with `resolve_all_references()` setting confidence and resolution_method on resolved references
+- `to_json()` on `KnowledgeGraph` now includes edge confidence in output
+
 ### Known Gaps
 - Route group prefix resolution missing for Go Gin `r.Group()`, PHP Laravel `Route::prefix()->group()`, C# `MapGroup()` (ADR-001 GAP-02 partial)

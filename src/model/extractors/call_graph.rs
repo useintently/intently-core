@@ -9,10 +9,11 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::types::{Reference, ReferenceKind, ResolutionMethod, Symbol};
+use crate::parser::SupportedLanguage;
 
-use super::common::{is_call_node, node_text};
+use super::common::{node_text, node_text_ref};
+use super::language_behavior::behavior_for;
 
 /// Extract all call-site references from a source file's CST.
 ///
@@ -28,9 +29,19 @@ pub fn extract_call_sites(
     file_path: &Path,
     symbols: &[Symbol],
 ) -> Vec<Reference> {
+    let behavior = behavior_for(language);
+    let call_kinds = behavior.call_node_kinds();
     let mut references = Vec::new();
     let root = tree.root_node();
-    walk_for_calls(&root, source, language, file_path, symbols, &mut references);
+    walk_for_calls(
+        &root,
+        source,
+        language,
+        file_path,
+        symbols,
+        call_kinds,
+        &mut references,
+    );
     references
 }
 
@@ -41,9 +52,10 @@ fn walk_for_calls(
     language: SupportedLanguage,
     file_path: &Path,
     _symbols: &[Symbol],
+    call_kinds: &[&str],
     results: &mut Vec<Reference>,
 ) {
-    if is_call_node(node.kind()) {
+    if call_kinds.contains(&node.kind()) {
         if let Some(callee) = extract_callee_name(node, source, language) {
             let enclosing = find_enclosing_function(node, source, language);
             let line = node.start_position().row + 1;
@@ -65,7 +77,9 @@ fn walk_for_calls(
     let count = node.child_count();
     for i in 0..count {
         if let Some(child) = node.child(i as u32) {
-            walk_for_calls(&child, source, language, file_path, _symbols, results);
+            walk_for_calls(
+                &child, source, language, file_path, _symbols, call_kinds, results,
+            );
         }
     }
 }
@@ -77,18 +91,12 @@ fn walk_for_calls(
 /// - Method calls: `obj.method()` → `"obj.method"`
 /// - Scoped calls (PHP/C++): `Cls::method()` → `"Cls::method"`
 /// - Chained calls: `a.b.c()` → `"a.b.c"`
-fn extract_callee_name(
-    node: &Node,
-    source: &str,
-    language: SupportedLanguage,
-) -> Option<String> {
+fn extract_callee_name(node: &Node, source: &str, language: SupportedLanguage) -> Option<String> {
     match language {
         // PHP has distinct node kinds for different call patterns
         SupportedLanguage::Php => extract_callee_php(node, source),
         // Java/Kotlin method_invocation has specific children
-        SupportedLanguage::Java | SupportedLanguage::Kotlin => {
-            extract_callee_java(node, source)
-        }
+        SupportedLanguage::Java | SupportedLanguage::Kotlin => extract_callee_java(node, source),
         // C# invocation_expression
         SupportedLanguage::CSharp => extract_callee_csharp(node, source),
         // Python/Ruby `call` node
@@ -108,12 +116,12 @@ fn extract_callee_name(
 /// - `field_expression` (Rust) → method call (`self.foo()`)
 fn extract_callee_generic(node: &Node, source: &str) -> Option<String> {
     let func_node = node.named_child(0)?;
-    let text = node_text(&func_node, source);
+    let text = node_text_ref(&func_node, source);
     // Filter out noise: constructors with `new`, raw string/number calls
     if text.is_empty() || text.starts_with('"') || text.starts_with('\'') {
         return None;
     }
-    Some(text)
+    Some(text.to_string())
 }
 
 /// Java/Kotlin: `method_invocation` has `name` and optional `object` children.
@@ -133,11 +141,11 @@ fn extract_callee_java(node: &Node, source: &str) -> Option<String> {
 /// C#: `invocation_expression` with first child as the callable.
 fn extract_callee_csharp(node: &Node, source: &str) -> Option<String> {
     let func_node = node.named_child(0)?;
-    let text = node_text(&func_node, source);
+    let text = node_text_ref(&func_node, source);
     if text.is_empty() {
         return None;
     }
-    Some(text)
+    Some(text.to_string())
 }
 
 /// Python/Ruby: `call` node with `function` field.
@@ -145,20 +153,20 @@ fn extract_callee_python_ruby(node: &Node, source: &str) -> Option<String> {
     // Python: call → function + arguments
     // Ruby: call → receiver.method or just method
     if let Some(func_node) = node.child_by_field_name("function") {
-        let text = node_text(&func_node, source);
+        let text = node_text_ref(&func_node, source);
         if text.is_empty() {
             return None;
         }
-        return Some(text);
+        return Some(text.to_string());
     }
     // Ruby `call` may have `method` field
     if let Some(method_node) = node.child_by_field_name("method") {
-        let method = node_text(&method_node, source);
+        let method = node_text_ref(&method_node, source);
         if let Some(recv_node) = node.child_by_field_name("receiver") {
-            let recv = node_text(&recv_node, source);
+            let recv = node_text_ref(&recv_node, source);
             return Some(format!("{}.{}", recv, method));
         }
-        return Some(method);
+        return Some(method.to_string());
     }
     // Fallback: first named child
     extract_callee_generic(node, source)
@@ -193,7 +201,8 @@ fn extract_callee_php(node: &Node, source: &str) -> Option<String> {
         }
         "function_call_expression" => {
             // func(args) → function child
-            let func_node = node.child_by_field_name("function")
+            let func_node = node
+                .child_by_field_name("function")
                 .or_else(|| node.named_child(0))?;
             Some(node_text(&func_node, source))
         }
@@ -285,10 +294,7 @@ mod tests {
     use crate::parser::{self, SupportedLanguage};
     use std::path::PathBuf;
 
-    fn parse_and_extract(
-        source: &str,
-        language: SupportedLanguage,
-    ) -> Vec<Reference> {
+    fn parse_and_extract(source: &str, language: SupportedLanguage) -> Vec<Reference> {
         let path = PathBuf::from("test_file");
         let parsed = parser::parse_source(&path, source, language, None).unwrap();
         extract_call_sites(source, &parsed.tree, language, &path, &[])
@@ -330,10 +336,7 @@ mod tests {
 
     #[test]
     fn typescript_module_level_call() {
-        let refs = parse_and_extract(
-            "const app = express();",
-            SupportedLanguage::TypeScript,
-        );
+        let refs = parse_and_extract("const app = express();", SupportedLanguage::TypeScript);
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].source_symbol, ""); // module level
         assert_eq!(refs[0].target_symbol, "express");
@@ -449,10 +452,7 @@ function run() { execute(); cleanup(); }
 
     #[test]
     fn target_file_and_line_are_none() {
-        let refs = parse_and_extract(
-            "function f() { foo(); }",
-            SupportedLanguage::TypeScript,
-        );
+        let refs = parse_and_extract("function f() { foo(); }", SupportedLanguage::TypeScript);
         assert_eq!(refs.len(), 1);
         assert!(refs[0].target_file.is_none());
         assert!(refs[0].target_line.is_none());

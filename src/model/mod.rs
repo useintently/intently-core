@@ -1,9 +1,10 @@
-pub mod types;
 pub mod builder;
 pub mod diff;
 pub mod extractors;
 pub mod graph;
+pub mod graph_analysis;
 pub mod import_resolver;
 pub mod module_inference;
 pub mod patterns;
 pub mod symbol_table;
+pub mod types;

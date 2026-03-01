@@ -40,10 +40,7 @@ pub fn infer_module_boundaries(
 
     // Gather all file paths from both maps (a file might appear in one but
     // not the other).
-    let all_files: BTreeSet<&PathBuf> = file_symbols
-        .keys()
-        .chain(file_imports.keys())
-        .collect();
+    let all_files: BTreeSet<&PathBuf> = file_symbols.keys().chain(file_imports.keys()).collect();
 
     for file_path in &all_files {
         let module_name = module_name_for_file(file_path, project_root);
@@ -108,9 +105,7 @@ pub fn infer_module_boundaries(
 /// - `project/src/index.ts` with root `project/` -> `src`
 /// - `project/main.go` with root `project/` -> `__root__`
 fn module_name_for_file(file_path: &Path, project_root: &Path) -> String {
-    let relative = file_path
-        .strip_prefix(project_root)
-        .unwrap_or(file_path);
+    let relative = file_path.strip_prefix(project_root).unwrap_or(file_path);
 
     let components: Vec<&str> = relative
         .components()
@@ -144,9 +139,7 @@ fn is_relative_import(source: &str) -> bool {
 /// This performs logical path resolution (handling `..` components) without
 /// requiring filesystem access.
 fn resolve_relative_import(file_path: &Path, import_source: &str) -> PathBuf {
-    let base_dir = file_path
-        .parent()
-        .unwrap_or(Path::new(""));
+    let base_dir = file_path.parent().unwrap_or(Path::new(""));
 
     let import_path = Path::new(import_source);
     let combined = base_dir.join(import_path);
@@ -228,11 +221,17 @@ mod tests {
         );
         file_symbols.insert(
             PathBuf::from("/project/src/users/service.ts"),
-            vec![public_symbol("UserService", "/project/src/users/service.ts")],
+            vec![public_symbol(
+                "UserService",
+                "/project/src/users/service.ts",
+            )],
         );
         file_symbols.insert(
             PathBuf::from("/project/src/orders/handler.ts"),
-            vec![public_symbol("handleOrder", "/project/src/orders/handler.ts")],
+            vec![public_symbol(
+                "handleOrder",
+                "/project/src/orders/handler.ts",
+            )],
         );
 
         let file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();
@@ -269,7 +268,10 @@ mod tests {
         assert_eq!(boundaries.len(), 1);
         let module = &boundaries[0];
         assert_eq!(module.name, "src/payments");
-        assert_eq!(module.exported_symbols, vec!["PaymentService", "processPayment"]);
+        assert_eq!(
+            module.exported_symbols,
+            vec!["PaymentService", "processPayment"]
+        );
     }
 
     #[test]
@@ -283,7 +285,10 @@ mod tests {
         );
         file_symbols.insert(
             PathBuf::from("/project/src/orders/handler.ts"),
-            vec![public_symbol("handleOrder", "/project/src/orders/handler.ts")],
+            vec![public_symbol(
+                "handleOrder",
+                "/project/src/orders/handler.ts",
+            )],
         );
 
         let mut file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();

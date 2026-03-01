@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::types::*;
+use crate::error::Result;
 use crate::parser::SupportedLanguage;
 
 /// Tracks what a single file contributed to the code model.
@@ -73,18 +74,43 @@ impl CodeModelBuilder {
     /// If the file was previously tracked, its old contributions are removed
     /// before the new ones are added.
     pub fn set_file(&mut self, extraction: &FileExtraction) {
+        // Delegate to update_file with an infallible closure.
+        // The unwrap is safe because the closure never returns Err.
+        let _ = self.update_file(extraction, |new| Ok(new.clone()));
+    }
+
+    /// Atomically update a file's contributions using a closure.
+    ///
+    /// The closure `f` receives the new extraction and returns the
+    /// `FileExtraction` to store. If the closure returns `Err`, the
+    /// previous state is preserved — no partial update occurs.
+    ///
+    /// This enables callers to perform load-modify-save patterns where a
+    /// mid-way failure does not corrupt the builder state.
+    pub fn update_file<F>(&mut self, extraction: &FileExtraction, f: F) -> Result<()>
+    where
+        F: FnOnce(&FileExtraction) -> Result<FileExtraction>,
+    {
+        let resolved = f(extraction)?;
+
         let contribution = FileContribution {
-            language: extraction.language,
-            interfaces: extraction.interfaces.clone(),
-            dependencies: extraction.dependencies.clone(),
-            sinks: extraction.sinks.clone(),
-            symbols: extraction.symbols.clone(),
-            imports: extraction.imports.clone(),
-            references: extraction.references.clone(),
-            data_models: extraction.data_models.clone(),
+            language: resolved.language,
+            interfaces: resolved.interfaces.clone(),
+            dependencies: resolved.dependencies.clone(),
+            sinks: resolved.sinks.clone(),
+            symbols: resolved.symbols.clone(),
+            imports: resolved.imports.clone(),
+            references: resolved.references.clone(),
+            data_models: resolved.data_models.clone(),
         };
         self.contributions
-            .insert(extraction.file.clone(), contribution);
+            .insert(resolved.file.clone(), contribution);
+        Ok(())
+    }
+
+    /// Check whether the builder has contributions for a given file.
+    pub fn has_file(&self, path: &Path) -> bool {
+        self.contributions.contains_key(path)
     }
 
     /// Remove a file's contributions from the builder.
@@ -150,12 +176,13 @@ impl CodeModelBuilder {
         });
         dependencies.sort_by(|a, b| a.target.cmp(&b.target));
         sinks.sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
-        symbols.sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
+        symbols
+            .sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
         imports.sort_by(|a, b| (&a.source, a.line).cmp(&(&b.source, b.line)));
-        references.sort_by(|a, b| {
-            (&a.source_file, a.source_line).cmp(&(&b.source_file, b.source_line))
-        });
-        data_models.sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
+        references
+            .sort_by(|a, b| (&a.source_file, a.source_line).cmp(&(&b.source_file, b.source_line)));
+        data_models
+            .sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
 
         let language = dominant_language_from_counts(&lang_counts);
 
@@ -216,9 +243,7 @@ pub fn build_code_model(extractions: &[FileExtraction], project_name: &str) -> C
 ///
 /// Ties are broken by language name (alphabetically) for determinism.
 /// Returns TypeScript as fallback for empty maps.
-fn dominant_language_from_counts(
-    counts: &HashMap<SupportedLanguage, usize>,
-) -> SupportedLanguage {
+fn dominant_language_from_counts(counts: &HashMap<SupportedLanguage, usize>) -> SupportedLanguage {
     counts
         .iter()
         .max_by(|(lang_a, count_a), (lang_b, count_b)| {
@@ -236,11 +261,7 @@ mod tests {
 
     use super::*;
 
-    fn make_extraction(
-        file: &str,
-        interfaces: Vec<Interface>,
-        sinks: Vec<Sink>,
-    ) -> FileExtraction {
+    fn make_extraction(file: &str, interfaces: Vec<Interface>, sinks: Vec<Sink>) -> FileExtraction {
         FileExtraction {
             file: PathBuf::from(file),
             language: SupportedLanguage::TypeScript,
@@ -507,12 +528,14 @@ mod tests {
         );
 
         let from_build_code_model = build_code_model(&[ext1.clone(), ext2.clone()], "proj");
-        let from_builder =
-            CodeModelBuilder::from_extractions(&[ext1, ext2], "proj").build();
+        let from_builder = CodeModelBuilder::from_extractions(&[ext1, ext2], "proj").build();
 
         let json1 = serde_json::to_string(&from_build_code_model).unwrap();
         let json2 = serde_json::to_string(&from_builder).unwrap();
-        assert_eq!(json1, json2, "CodeModelBuilder must produce identical output to build_code_model");
+        assert_eq!(
+            json1, json2,
+            "CodeModelBuilder must produce identical output to build_code_model"
+        );
     }
 
     #[test]
@@ -661,5 +684,123 @@ mod tests {
 
         assert_eq!(model.stats.total_imports, 2);
         assert_eq!(model.components[0].imports.len(), 2);
+    }
+
+    // --- Atomic update tests ---
+
+    #[test]
+    fn test_builder_atomic_update_on_error() {
+        use crate::error::IntentlyError;
+
+        let mut builder = CodeModelBuilder::new("proj");
+
+        // Set initial state with route /original
+        let original = make_extraction(
+            "src/app.ts",
+            vec![Interface {
+                method: HttpMethod::Get,
+                path: "/original".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+            }],
+            vec![],
+        );
+        builder.set_file(&original);
+
+        // Verify initial state
+        let model_before = builder.build();
+        assert_eq!(model_before.components[0].interfaces.len(), 1);
+        assert_eq!(model_before.components[0].interfaces[0].path, "/original");
+
+        // Attempt an update that fails mid-way — closure returns Err
+        let new_extraction = make_extraction(
+            "src/app.ts",
+            vec![Interface {
+                method: HttpMethod::Post,
+                path: "/should-not-appear".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 5),
+            }],
+            vec![],
+        );
+
+        let result = builder.update_file(&new_extraction, |_new| {
+            Err(IntentlyError::ExtractionFailed {
+                path: PathBuf::from("src/app.ts"),
+                reason: "simulated extraction error".into(),
+            })
+        });
+
+        // update_file should return Err
+        assert!(result.is_err());
+
+        // Previous state must be intact — /original still present
+        let model_after = builder.build();
+        assert_eq!(model_after.components[0].interfaces.len(), 1);
+        assert_eq!(model_after.components[0].interfaces[0].path, "/original");
+    }
+
+    #[test]
+    fn test_builder_update_file_success_replaces_contributions() {
+        let mut builder = CodeModelBuilder::new("proj");
+
+        let original = make_extraction(
+            "src/app.ts",
+            vec![Interface {
+                method: HttpMethod::Get,
+                path: "/v1".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+            }],
+            vec![],
+        );
+        builder.set_file(&original);
+
+        // Successful update replaces the contribution
+        let updated = make_extraction(
+            "src/app.ts",
+            vec![Interface {
+                method: HttpMethod::Get,
+                path: "/v2".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+            }],
+            vec![],
+        );
+
+        let result = builder.update_file(&updated, |new| Ok(new.clone()));
+        assert!(result.is_ok());
+
+        let model = builder.build();
+        assert_eq!(model.components[0].interfaces.len(), 1);
+        assert_eq!(model.components[0].interfaces[0].path, "/v2");
+    }
+
+    #[test]
+    fn test_builder_update_file_has_file_check() {
+        let mut builder = CodeModelBuilder::new("proj");
+
+        // Initially no file tracked
+        assert!(!builder.has_file(Path::new("src/app.ts")));
+
+        let ext = make_extraction(
+            "src/app.ts",
+            vec![Interface {
+                method: HttpMethod::Get,
+                path: "/existing".into(),
+                auth: None,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+            }],
+            vec![],
+        );
+        builder.set_file(&ext);
+
+        // Now it should be tracked
+        assert!(builder.has_file(Path::new("src/app.ts")));
+
+        // And we can update it successfully
+        let new_ext = make_extraction("src/app.ts", vec![], vec![]);
+        let result = builder.update_file(&new_ext, |new| Ok(new.clone()));
+        assert!(result.is_ok());
     }
 }

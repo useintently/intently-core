@@ -15,11 +15,13 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::patterns;
 use crate::model::types::*;
+use crate::parser::SupportedLanguage;
 
-use super::common::{self, anchor_from_node, extract_string_value, node_text, truncate_call_text};
+use super::common::{
+    self, anchor_from_node, extract_string_value, node_text, node_text_ref, truncate_call_text,
+};
 
 /// Extract semantic information from a Python source file.
 pub fn extract(
@@ -36,12 +38,7 @@ pub fn extract(
     extraction
 }
 
-fn extract_recursive(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     match node.kind() {
         "decorated_definition" => {
             try_extract_decorated_route(node, source, file_path, extraction);
@@ -135,14 +132,14 @@ fn try_parse_route_decorator(expr: &Node, source: &str) -> Option<(HttpMethod, S
         return None;
     }
 
-    let method_name = node_text(&function.child_by_field_name("attribute")?, source);
+    let method_name = node_text_ref(&function.child_by_field_name("attribute")?, source);
 
     // Determine HTTP method from decorator name
     let http_method = if method_name == "route" {
         // Flask's @app.route() — defaults to ALL
         HttpMethod::All
     } else {
-        common::parse_http_method(&method_name)?
+        common::parse_http_method(method_name)?
     };
 
     // Extract path from first argument
@@ -160,21 +157,21 @@ fn try_parse_route_decorator(expr: &Node, source: &str) -> Option<(HttpMethod, S
 /// - `@permission_classes([IsAuthenticated])` (call with args)
 fn try_parse_auth_decorator(expr: &Node, source: &str) -> Option<AuthKind> {
     let name = match expr.kind() {
-        "identifier" => node_text(expr, source),
+        "identifier" => node_text_ref(expr, source),
         "call" => {
             let function = expr.child_by_field_name("function")?;
             match function.kind() {
-                "identifier" => node_text(&function, source),
-                "attribute" => node_text(&function.child_by_field_name("attribute")?, source),
+                "identifier" => node_text_ref(&function, source),
+                "attribute" => node_text_ref(&function.child_by_field_name("attribute")?, source),
                 _ => return None,
             }
         }
-        "attribute" => node_text(&expr.child_by_field_name("attribute")?, source),
+        "attribute" => node_text_ref(&expr.child_by_field_name("attribute")?, source),
         _ => return None,
     };
 
-    if patterns::is_auth_indicator(&name) {
-        Some(AuthKind::Decorator(name))
+    if patterns::is_auth_indicator(name) {
+        Some(AuthKind::Decorator(name.to_string()))
     } else {
         None
     }
@@ -194,7 +191,7 @@ fn try_extract_django_path(
 
     // Match `path(...)` or `re_path(...)`
     let func_name = match function.kind() {
-        "identifier" => node_text(&function, source),
+        "identifier" => node_text_ref(&function, source),
         _ => return,
     };
 
@@ -210,7 +207,11 @@ fn try_extract_django_path(
     let url_path = match find_first_string_arg(&args, source) {
         Some(p) => {
             // Django paths don't start with / — normalize
-            if p.starts_with('/') { p } else { format!("/{p}") }
+            if p.starts_with('/') {
+                p
+            } else {
+                format!("/{p}")
+            }
         }
         None => return,
     };
@@ -236,19 +237,19 @@ fn try_extract_http_call(
     };
 
     let object_name = match function.child_by_field_name("object") {
-        Some(obj) if obj.kind() == "identifier" => node_text(&obj, source),
+        Some(obj) if obj.kind() == "identifier" => node_text_ref(&obj, source),
         _ => return,
     };
 
     let method_name = match function.child_by_field_name("attribute") {
-        Some(attr) => node_text(&attr, source),
+        Some(attr) => node_text_ref(&attr, source),
         None => return,
     };
 
     // Known HTTP client libraries
-    let is_http_client = matches!(object_name.as_str(), "requests" | "httpx")
+    let is_http_client = matches!(object_name, "requests" | "httpx")
         && matches!(
-            method_name.as_str(),
+            method_name,
             "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
         );
 
@@ -292,21 +293,22 @@ mod tests {
 
     fn extract_py(source: &str) -> FileExtraction {
         let path = PathBuf::from("test.py");
-        let parsed =
-            parser::parse_source(&path, source, SupportedLanguage::Python, None).unwrap();
+        let parsed = parser::parse_source(&path, source, SupportedLanguage::Python, None).unwrap();
         extract(&path, source, &parsed.tree, SupportedLanguage::Python)
     }
 
     #[test]
     fn extracts_fastapi_get_route() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 from fastapi import FastAPI
 app = FastAPI()
 
 @app.get("/users")
 def list_users():
     return []
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/users");
@@ -314,11 +316,13 @@ def list_users():
 
     #[test]
     fn extracts_fastapi_post_route() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 @router.post("/api/orders")
 def create_order(order: Order):
     return {"id": 1}
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Post);
         assert_eq!(ext.interfaces[0].path, "/api/orders");
@@ -326,14 +330,16 @@ def create_order(order: Order):
 
     #[test]
     fn extracts_flask_route() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 from flask import Flask
 app = Flask(__name__)
 
 @app.route("/items")
 def list_items():
     return jsonify([])
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::All);
         assert_eq!(ext.interfaces[0].path, "/items");
@@ -341,7 +347,8 @@ def list_items():
 
     #[test]
     fn extracts_django_path() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 from django.urls import path
 from . import views
 
@@ -349,7 +356,8 @@ urlpatterns = [
     path('api/users/', views.list_users),
     path('api/orders/', views.create_order),
 ]
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 2);
         assert_eq!(ext.interfaces[0].path, "/api/users/");
         assert_eq!(ext.interfaces[0].method, HttpMethod::All);
@@ -358,12 +366,14 @@ urlpatterns = [
 
     #[test]
     fn detects_login_required_decorator() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 @app.get("/api/profile")
 @login_required
 def get_profile():
     return {"user": "me"}
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(
             ext.interfaces[0].auth,
@@ -373,59 +383,76 @@ def get_profile():
 
     #[test]
     fn detects_jwt_required_decorator() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 @app.post("/api/orders")
 @jwt_required()
 def create_order():
     pass
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_some());
     }
 
     #[test]
     fn no_auth_when_missing() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_none());
     }
 
     #[test]
     fn extracts_requests_http_call() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 import requests
 response = requests.get("https://api.example.com/data")
-"#);
+"#,
+        );
         assert_eq!(ext.dependencies.len(), 1);
-        assert_eq!(ext.dependencies[0].dependency_type, DependencyType::HttpCall);
+        assert_eq!(
+            ext.dependencies[0].dependency_type,
+            DependencyType::HttpCall
+        );
     }
 
     #[test]
     fn extracts_httpx_http_call() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 import httpx
 response = httpx.post("https://payment.service/charge", json=payload)
-"#);
+"#,
+        );
         assert_eq!(ext.dependencies.len(), 1);
-        assert_eq!(ext.dependencies[0].dependency_type, DependencyType::HttpCall);
+        assert_eq!(
+            ext.dependencies[0].dependency_type,
+            DependencyType::HttpCall
+        );
     }
 
     #[test]
     fn detects_pii_in_log_sink() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 logging.info("User email: %s", user.email)
-"#);
+"#,
+        );
         assert_eq!(ext.sinks.len(), 1);
         assert!(ext.sinks[0].contains_pii);
     }
 
     #[test]
     fn extracts_multiple_routes() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 @app.get("/users")
 def list_users():
     return []
@@ -439,7 +466,8 @@ def create_user(user: User):
 @auth_required
 def delete_user(id: int):
     pass
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 3);
         assert!(ext.interfaces[0].auth.is_none());
         assert!(ext.interfaces[1].auth.is_some());
@@ -448,7 +476,8 @@ def delete_user(id: int):
 
     #[test]
     fn realistic_fastapi_file() {
-        let ext = extract_py(r#"
+        let ext = extract_py(
+            r#"
 from fastapi import FastAPI, Depends
 import requests
 
@@ -470,7 +499,8 @@ async def process_payment(payment: PaymentRequest):
 async def list_users():
     logging.info("Listing users")
     return []
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 3);
         assert!(ext.interfaces[0].auth.is_none()); // /health
         assert!(ext.interfaces[1].auth.is_some()); // /api/payments

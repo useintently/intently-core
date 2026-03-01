@@ -40,31 +40,52 @@ pub const AUTH_INDICATORS: &[&str] = &["auth", "jwt", "protect", "verify", "guar
 /// Covers: JS (console, winston, pino), Python (logging, logger),
 /// Java (Logger, log), Go (log, slog), Ruby (Logger), etc.
 pub const LOG_OBJECTS: &[&str] = &[
-    "console",  // JS/TS
-    "logger",   // Universal
-    "log",      // Universal
-    "winston",  // JS
-    "pino",     // JS
-    "logging",  // Python
-    "slog",     // Go
-    "Logger",   // Java/Ruby/C#
-    "Log",      // C#/Kotlin
+    "console", // JS/TS
+    "logger",  // Universal
+    "log",     // Universal
+    "winston", // JS
+    "pino",    // JS
+    "logging", // Python
+    "slog",    // Go
+    "Logger",  // Java/Ruby/C#
+    "Log",     // C#/Kotlin
 ];
 
 /// Method names that indicate a log call.
 pub const LOG_METHODS: &[&str] = &[
-    "log", "info", "warn", "error", "debug", "trace", "fatal",
+    "log",
+    "info",
+    "warn",
+    "error",
+    "debug",
+    "trace",
+    "fatal",
     // Python
-    "warning", "critical", "exception",
+    "warning",
+    "critical",
+    "exception",
     // Go (capitalized methods used by log, slog, and popular loggers)
-    "Println", "Printf", "Print", "Fatalf", "Panicf",
-    "Info", "Warn", "Error", "Debug", "Fatal",
+    "Println",
+    "Printf",
+    "Print",
+    "Fatalf",
+    "Panicf",
+    "Info",
+    "Warn",
+    "Error",
+    "Debug",
+    "Fatal",
     // Java
     "severe",
     // Ruby
     "puts",
     // C# ASP.NET Core ILogger<T>
-    "LogInformation", "LogWarning", "LogError", "LogDebug", "LogTrace", "LogCritical",
+    "LogInformation",
+    "LogWarning",
+    "LogError",
+    "LogDebug",
+    "LogTrace",
+    "LogCritical",
 ];
 
 /// HTTP method names recognized as route registrations.
@@ -82,7 +103,9 @@ pub const ROUTE_METHODS: &[&str] = &[
 /// Detect PII field names in a text string (case-insensitive).
 pub fn contains_pii(text: &str) -> bool {
     let text_lower = text.to_lowercase();
-    PII_PATTERNS.iter().any(|pattern| text_lower.contains(pattern))
+    PII_PATTERNS
+        .iter()
+        .any(|pattern| text_lower.contains(pattern))
 }
 
 /// Check if a name indicates auth middleware (case-insensitive).

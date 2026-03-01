@@ -62,11 +62,7 @@ fn express_ecommerce_extracts_routes_auth_httpcalls_sinks() {
         "Expected ≥5 authenticated routes, got {}",
         authed
     );
-    assert!(
-        public >= 3,
-        "Expected ≥3 public routes, got {}",
-        public
-    );
+    assert!(public >= 3, "Expected ≥3 public routes, got {}", public);
 
     // Should detect external HTTP calls (axios, fetch)
     let http_calls = &model.components[0].dependencies;
@@ -486,7 +482,12 @@ fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
     );
 
     // Minimal API routes from Program.cs
-    let minimal_api_paths = ["/health", "/api/v1/catalog/categories", "/api/v1/catalog/import", "/api/v1/cache/{key}"];
+    let minimal_api_paths = [
+        "/health",
+        "/api/v1/catalog/categories",
+        "/api/v1/catalog/import",
+        "/api/v1/cache/{key}",
+    ];
     for path in &minimal_api_paths {
         assert!(
             routes.iter().any(|r| r.path == *path),
@@ -611,7 +612,10 @@ fn nethttp_api_extracts_handlefunc_routes() {
     );
 
     // net/http routes default to HttpMethod::All
-    let all_method = routes.iter().filter(|r| r.method == HttpMethod::All).count();
+    let all_method = routes
+        .iter()
+        .filter(|r| r.method == HttpMethod::All)
+        .count();
     assert!(
         all_method >= 3,
         "net/http HandleFunc should produce All method routes, got {}",
@@ -756,7 +760,10 @@ fn rails_ecommerce_extracts_routes_auth_httpcalls_sinks() {
     assert!(pii_sinks >= 1, "Expected ≥1 PII sink in Rails project");
 
     // Should have resources :name routes (HttpMethod::All)
-    let resource_routes = routes.iter().filter(|r| r.method == HttpMethod::All).count();
+    let resource_routes = routes
+        .iter()
+        .filter(|r| r.method == HttpMethod::All)
+        .count();
     assert!(
         resource_routes >= 1,
         "Expected ≥1 resources route, got {}",
@@ -886,21 +893,21 @@ fn all_sixteen_languages_are_covered_by_fixture_projects() {
     // This test verifies that our fixture suite covers all 16 supported languages.
     // Each fixture project uses at least one of the 16 languages.
     let projects = vec![
-        ("express_ecommerce", "TypeScript"),       // TypeScript
-        ("tsx_dashboard", "TSX"),                   // TSX
-        ("jsx_app", "JSX"),                         // JSX
-        ("fastapi_ecommerce", "Python"),            // Python
-        ("spring_ecommerce", "Java"),               // Java
-        ("kotlin_spring", "Kotlin"),                // Kotlin
-        ("aspnet_ecommerce", "C#"),                 // C#
-        ("gin_ecommerce", "Go"),                    // Go
-        ("laravel_ecommerce", "PHP"),               // PHP
-        ("rails_ecommerce", "Ruby"),                // Ruby
-        ("rust_service", "Rust"),                   // Rust
-        ("cpp_service", "C++"),                     // C++
-        ("c_service", "C"),                         // C
-        ("swift_service", "Swift"),                 // Swift
-        ("scala_service", "Scala"),                 // Scala
+        ("express_ecommerce", "TypeScript"), // TypeScript
+        ("tsx_dashboard", "TSX"),            // TSX
+        ("jsx_app", "JSX"),                  // JSX
+        ("fastapi_ecommerce", "Python"),     // Python
+        ("spring_ecommerce", "Java"),        // Java
+        ("kotlin_spring", "Kotlin"),         // Kotlin
+        ("aspnet_ecommerce", "C#"),          // C#
+        ("gin_ecommerce", "Go"),             // Go
+        ("laravel_ecommerce", "PHP"),        // PHP
+        ("rails_ecommerce", "Ruby"),         // Ruby
+        ("rust_service", "Rust"),            // Rust
+        ("cpp_service", "C++"),              // C++
+        ("c_service", "C"),                  // C
+        ("swift_service", "Swift"),          // Swift
+        ("scala_service", "Scala"),          // Scala
     ];
 
     // JavaScript is covered by express_ecommerce (JS files would use same extractor)
@@ -929,4 +936,39 @@ fn all_sixteen_languages_are_covered_by_fixture_projects() {
             result.files_analyzed
         );
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Graph Analysis Pipeline
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn express_ecommerce_graph_analysis_pipeline() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/express_ecommerce");
+
+    let mut engine = IntentlyEngine::new(fixture_path);
+    engine.full_analysis().expect("extraction should succeed");
+
+    let ctx = engine
+        .run_graph_analysis()
+        .expect("graph analysis should produce results");
+
+    // Degree centrality should be computed for all nodes
+    assert!(
+        !ctx.degree_centrality.is_empty(),
+        "degree centrality should be non-empty for a multi-file project"
+    );
+
+    // Entry points should detect HTTP endpoints
+    assert!(
+        !ctx.entry_points.is_empty(),
+        "should detect at least one entry point in express_ecommerce"
+    );
+
+    // Process flows should trace from entry points
+    assert!(
+        !ctx.process_flows.is_empty(),
+        "should trace at least one process flow from entry points"
+    );
 }

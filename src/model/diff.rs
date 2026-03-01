@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::types::{Dependency, Interface, Sink, CodeModel};
+use super::types::{CodeModel, Dependency, Interface, Sink};
 
 /// Semantic diff between two CodeModel snapshots.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -118,11 +118,16 @@ pub fn compute_diff(old: &CodeModel, new: &CodeModel) -> SemanticDiff {
 }
 
 fn collect_interfaces(model: &CodeModel) -> Vec<&Interface> {
-    model.components.iter().flat_map(|c| &c.interfaces).collect()
+    model
+        .components
+        .iter()
+        .flat_map(|c| &c.interfaces)
+        .collect()
 }
 
 fn collect_dependencies(model: &CodeModel) -> Vec<&Dependency> {
-    model.components
+    model
+        .components
         .iter()
         .flat_map(|c| &c.dependencies)
         .collect()
@@ -164,17 +169,14 @@ where
     changes
 }
 
-fn compute_risk(
-    interface_changes: &[InterfaceChange],
-    sink_changes: &[SinkChange],
-) -> RiskSummary {
-    let has_unauthed_new_endpoint = interface_changes.iter().any(|ic| {
-        ic.change_type == ChangeType::Added && ic.interface.auth.is_none()
-    });
+fn compute_risk(interface_changes: &[InterfaceChange], sink_changes: &[SinkChange]) -> RiskSummary {
+    let has_unauthed_new_endpoint = interface_changes
+        .iter()
+        .any(|ic| ic.change_type == ChangeType::Added && ic.interface.auth.is_none());
 
-    let has_new_pii_sink = sink_changes.iter().any(|sc| {
-        sc.change_type == ChangeType::Added && sc.sink.contains_pii
-    });
+    let has_new_pii_sink = sink_changes
+        .iter()
+        .any(|sc| sc.change_type == ChangeType::Added && sc.sink.contains_pii);
 
     let security = if has_new_pii_sink || has_unauthed_new_endpoint {
         RiskLevel::High
@@ -201,8 +203,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::parser::SupportedLanguage;
     use crate::model::types::*;
+    use crate::parser::SupportedLanguage;
 
     fn make_model(
         interfaces: Vec<Interface>,

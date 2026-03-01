@@ -65,10 +65,7 @@ impl SymbolTable {
                     parent: symbol.parent.clone(),
                 };
 
-                per_file.insert(
-                    (file.clone(), symbol.name.clone()),
-                    location.clone(),
-                );
+                per_file.insert((file.clone(), symbol.name.clone()), location.clone());
 
                 global
                     .entry(symbol.name.clone())
@@ -92,10 +89,7 @@ impl SymbolTable {
 
     /// Level 2: global lookup by name — returns all matches.
     pub fn resolve_global(&self, name: &str) -> &[SymbolLocation] {
-        self.global
-            .get(name)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+        self.global.get(name).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// Resolve a symbol name using the full heuristic chain.
@@ -152,9 +146,7 @@ impl SymbolTable {
                 // Prefer match in same directory as source file
                 let source_dir = source_file.parent();
                 if let Some(dir) = source_dir {
-                    if let Some(loc) = global_matches
-                        .iter()
-                        .find(|l| l.file.parent() == Some(dir))
+                    if let Some(loc) = global_matches.iter().find(|l| l.file.parent() == Some(dir))
                     {
                         return ResolveResult {
                             location: Some(loc.clone()),
@@ -415,21 +407,17 @@ mod tests {
         let table = SymbolTable::from_file_symbols(&fs);
 
         let mut imports = HashMap::new();
-        imports.insert(
-            "UserService".to_string(),
-            PathBuf::from("src/service.ts"),
-        );
+        imports.insert("UserService".to_string(), PathBuf::from("src/service.ts"));
 
-        let result = table.resolve(
-            "UserService",
-            Path::new("src/handler.ts"),
-            &imports,
-        );
+        let result = table.resolve("UserService", Path::new("src/handler.ts"), &imports);
 
         assert!(result.location.is_some());
         assert_eq!(result.confidence, 0.95);
         assert_eq!(result.method, ResolutionMethod::ImportBased);
-        assert_eq!(result.location.unwrap().file, PathBuf::from("src/service.ts"));
+        assert_eq!(
+            result.location.unwrap().file,
+            PathBuf::from("src/service.ts")
+        );
     }
 
     #[test]
@@ -439,11 +427,7 @@ mod tests {
 
         let imports = HashMap::new(); // no imports
 
-        let result = table.resolve(
-            "validate",
-            Path::new("src/handler.ts"),
-            &imports,
-        );
+        let result = table.resolve("validate", Path::new("src/handler.ts"), &imports);
 
         assert!(result.location.is_some());
         assert_eq!(result.confidence, 0.90);
@@ -458,11 +442,7 @@ mod tests {
         let imports = HashMap::new();
 
         // "UserService" is globally unique and not in the source file
-        let result = table.resolve(
-            "UserService",
-            Path::new("src/utils/helpers.ts"),
-            &imports,
-        );
+        let result = table.resolve("UserService", Path::new("src/utils/helpers.ts"), &imports);
 
         assert!(result.location.is_some());
         assert_eq!(result.confidence, 0.80);
@@ -501,11 +481,7 @@ mod tests {
         let imports = HashMap::new();
 
         // "validate" is ambiguous, source file is in a different directory
-        let result = table.resolve(
-            "validate",
-            Path::new("other/dir/file.ts"),
-            &imports,
-        );
+        let result = table.resolve("validate", Path::new("other/dir/file.ts"), &imports);
 
         assert!(result.location.is_some());
         assert_eq!(result.method, ResolutionMethod::GlobalAmbiguous);
@@ -519,11 +495,7 @@ mod tests {
 
         let imports = HashMap::new();
 
-        let result = table.resolve(
-            "nonexistent",
-            Path::new("src/handler.ts"),
-            &imports,
-        );
+        let result = table.resolve("nonexistent", Path::new("src/handler.ts"), &imports);
 
         assert!(result.location.is_none());
         assert_eq!(result.confidence, 0.0);
@@ -565,12 +537,7 @@ mod tests {
             line: 1,
         }];
 
-        let index = build_import_index(
-            Path::new("src/handler.ts"),
-            &imports,
-            &fs,
-            Path::new(""),
-        );
+        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
 
         assert_eq!(
             index.get("UserService"),
@@ -587,12 +554,7 @@ mod tests {
             line: 1,
         }];
 
-        let index = build_import_index(
-            Path::new("src/handler.ts"),
-            &imports,
-            &fs,
-            Path::new(""),
-        );
+        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
 
         assert!(index.is_empty());
     }
@@ -607,13 +569,12 @@ mod tests {
         let imports = HashMap::new();
 
         // "user.getUser" should strip to "getUser" and find it
-        let result = table.resolve(
-            "user.getUser",
-            Path::new("src/handler.ts"),
-            &imports,
-        );
+        let result = table.resolve("user.getUser", Path::new("src/handler.ts"), &imports);
 
         assert!(result.location.is_some());
-        assert_eq!(result.location.unwrap().file, PathBuf::from("src/service.ts"));
+        assert_eq!(
+            result.location.unwrap().file,
+            PathBuf::from("src/service.ts")
+        );
     }
 }

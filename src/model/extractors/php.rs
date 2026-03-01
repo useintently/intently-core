@@ -12,11 +12,13 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::patterns;
 use crate::model::types::*;
+use crate::parser::SupportedLanguage;
 
-use super::common::{self, anchor_from_node, extract_string_value, node_text, truncate_call_text};
+use super::common::{
+    self, anchor_from_node, extract_string_value, node_text, node_text_ref, truncate_call_text,
+};
 
 /// Extract semantic information from a PHP source file.
 pub fn extract(
@@ -33,12 +35,7 @@ pub fn extract(
     extraction
 }
 
-fn extract_recursive(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     match node.kind() {
         // Laravel routes: Route::get('/path', ...)
         "scoped_call_expression" => {
@@ -83,7 +80,7 @@ fn try_extract_laravel_route(
         None => return,
     };
 
-    let scope_name = node_text(&scope, source);
+    let scope_name = node_text_ref(&scope, source);
     if scope_name != "Route" {
         return;
     }
@@ -93,7 +90,7 @@ fn try_extract_laravel_route(
         None => return,
     };
 
-    let method_name = node_text(&method_node, source);
+    let method_name = node_text_ref(&method_node, source);
 
     // Handle Route::resource() — expands to 7 RESTful routes
     // Handle Route::apiResource() — expands to 5 RESTful routes (no create/edit)
@@ -130,7 +127,7 @@ fn try_extract_laravel_route(
         return;
     }
 
-    let http_method = match common::parse_http_method(&method_name) {
+    let http_method = match common::parse_http_method(method_name) {
         Some(m) => m,
         None => return,
     };
@@ -183,21 +180,21 @@ fn expand_resource_routes(
     // Standard resource routes
     let routes: &[(&str, &str)] = if api_only {
         &[
-            ("get", ""),             // index
-            ("post", ""),            // store
-            ("get", &param),         // show
-            ("put", &param),         // update
-            ("delete", &param),      // destroy
+            ("get", ""),        // index
+            ("post", ""),       // store
+            ("get", &param),    // show
+            ("put", &param),    // update
+            ("delete", &param), // destroy
         ]
     } else {
         &[
-            ("get", ""),             // index
-            ("get", "create"),       // create
-            ("post", ""),            // store
-            ("get", &param),         // show
-            ("get", "edit"),         // edit (simplified — actual is {param}/edit)
-            ("put", &param),         // update
-            ("delete", &param),      // destroy
+            ("get", ""),        // index
+            ("get", "create"),  // create
+            ("post", ""),       // store
+            ("get", &param),    // show
+            ("get", "edit"),    // edit (simplified — actual is {param}/edit)
+            ("put", &param),    // update
+            ("delete", &param), // destroy
         ]
     };
 
@@ -230,10 +227,10 @@ fn detect_middleware_chain(node: &Node, source: &str) -> Option<AuthKind> {
     let parent = node.parent()?;
 
     if parent.kind() == "member_call_expression" {
-        let full_text = node_text(&parent, source);
+        let full_text = node_text_ref(&parent, source);
         if full_text.contains("middleware") {
             // Extract the middleware name from the full text
-            if let Some(mw_name) = extract_middleware_name(&full_text) {
+            if let Some(mw_name) = extract_middleware_name(full_text) {
                 if patterns::is_auth_indicator(&mw_name) {
                     return Some(AuthKind::Middleware(mw_name));
                 }
@@ -271,7 +268,7 @@ fn try_extract_http_facade_call(
         None => return,
     };
 
-    let scope_name = node_text(&scope, source);
+    let scope_name = node_text_ref(&scope, source);
     if scope_name != "Http" && scope_name != "Guzzle" {
         return;
     }
@@ -281,9 +278,9 @@ fn try_extract_http_facade_call(
         None => return,
     };
 
-    let method_name = node_text(&method_node, source);
+    let method_name = node_text_ref(&method_node, source);
     if !matches!(
-        method_name.as_str(),
+        method_name,
         "get" | "post" | "put" | "patch" | "delete" | "head" | "request"
     ) {
         return;
@@ -339,16 +336,17 @@ mod tests {
 
     fn extract_php(source: &str) -> FileExtraction {
         let path = PathBuf::from("routes.php");
-        let parsed =
-            parser::parse_source(&path, source, SupportedLanguage::Php, None).unwrap();
+        let parsed = parser::parse_source(&path, source, SupportedLanguage::Php, None).unwrap();
         extract(&path, source, &parsed.tree, SupportedLanguage::Php)
     }
 
     #[test]
     fn extracts_laravel_get_route() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::get('/users', [UserController::class, 'index']);
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/users");
@@ -356,9 +354,11 @@ Route::get('/users', [UserController::class, 'index']);
 
     #[test]
     fn extracts_laravel_post_route() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::post('/api/orders', [OrderController::class, 'store']);
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Post);
         assert_eq!(ext.interfaces[0].path, "/api/orders");
@@ -366,46 +366,59 @@ Route::post('/api/orders', [OrderController::class, 'store']);
 
     #[test]
     fn detects_middleware_auth() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::post('/api/orders', [OrderController::class, 'store'])->middleware('auth');
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_some());
     }
 
     #[test]
     fn no_auth_when_no_middleware() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::get('/health', function () { return 'ok'; });
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_none());
     }
 
     #[test]
     fn extracts_http_facade_call() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 $response = Http::get('https://api.example.com/data');
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.dependencies.len(), 1);
-        assert_eq!(ext.dependencies[0].dependency_type, DependencyType::HttpCall);
+        assert_eq!(
+            ext.dependencies[0].dependency_type,
+            DependencyType::HttpCall
+        );
     }
 
     #[test]
     fn detects_pii_in_log() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Log::info("User email: " . $user->email);
-?>"#);
+?>"#,
+        );
         assert!(ext.sinks.iter().any(|s| s.contains_pii));
     }
 
     #[test]
     fn extracts_multiple_routes() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::get('/users', [UserController::class, 'index']);
 Route::post('/users', [UserController::class, 'store']);
 Route::delete('/users/{id}', [UserController::class, 'destroy']);
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 3);
     }
 
@@ -413,25 +426,31 @@ Route::delete('/users/{id}', [UserController::class, 'destroy']);
 
     #[test]
     fn extracts_laravel_resource_routes() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::resource('/photos', PhotoController::class);
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 7, "resource() expands to 7 routes");
     }
 
     #[test]
     fn extracts_laravel_api_resource_routes() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::apiResource('/posts', PostController::class);
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 5, "apiResource() expands to 5 routes");
     }
 
     #[test]
     fn extracts_laravel_any_route() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::any('/webhook', WebhookController::class);
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::All);
         assert_eq!(ext.interfaces[0].path, "/webhook");
@@ -439,9 +458,11 @@ Route::any('/webhook', WebhookController::class);
 
     #[test]
     fn resource_routes_with_middleware() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::resource('/photos', PhotoController::class)->middleware('auth');
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 7, "resource() expands to 7 routes");
         assert!(
             ext.interfaces.iter().all(|i| i.auth.is_some()),
@@ -451,9 +472,11 @@ Route::resource('/photos', PhotoController::class)->middleware('auth');
 
     #[test]
     fn resource_route_paths_are_correct() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 Route::resource('/photos', PhotoController::class);
-?>"#);
+?>"#,
+        );
         let paths: Vec<&str> = ext.interfaces.iter().map(|i| i.path.as_str()).collect();
         assert!(paths.contains(&"/photos"), "index");
         assert!(paths.contains(&"/photos/create"), "create");
@@ -463,7 +486,8 @@ Route::resource('/photos', PhotoController::class);
 
     #[test]
     fn realistic_laravel_routes() {
-        let ext = extract_php(r#"<?php
+        let ext = extract_php(
+            r#"<?php
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', function () {
@@ -476,7 +500,8 @@ Route::get('/api/products', [ProductController::class, 'index']);
 
 $response = Http::post('https://stripe.api/charge', $data);
 Log::info("Processing payment for: " . $request->email);
-?>"#);
+?>"#,
+        );
         assert_eq!(ext.interfaces.len(), 3);
         assert!(ext.interfaces[0].auth.is_none()); // /health
         assert!(ext.interfaces[1].auth.is_some()); // /api/payments
