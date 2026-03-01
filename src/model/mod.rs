@@ -6,3 +6,4 @@ pub mod graph;
 pub mod import_resolver;
 pub mod module_inference;
 pub mod patterns;
+pub mod symbol_table;

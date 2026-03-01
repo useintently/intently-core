@@ -195,6 +195,13 @@ Route::middleware('auth:admin')->group(function () {
     Route::patch('/api/admin/reviews/{id}/reject', [ReviewController::class, 'reject']);
 });
 
+// Resource routes — CRUD via convention
+Route::resource('tickets', \App\Http\Controllers\TicketController::class)->middleware('auth');
+Route::apiResource('notifications', \App\Http\Controllers\NotificationController::class);
+
+// Catch-all webhook endpoint — matches any HTTP method
+Route::any('/api/webhooks/generic', [WebhookController::class, 'handleGeneric']);
+
 // Fallback for undefined API routes
 Route::fallback(function () {
     Log::warning('API route not found', ['url' => request()->url(), 'ip_address' => request()->ip()]);

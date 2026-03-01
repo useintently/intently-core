@@ -125,13 +125,17 @@ impl CodeModelBuilder {
             file_symbols.insert(path.clone(), contribution.symbols.clone());
         }
 
-        // Post-processing: resolve imports to cross-file references
-        let import_refs = super::import_resolver::resolve_imports(
+        // Post-processing: resolve ALL references (imports + calls + hierarchy)
+        // via the two-level symbol table for confident cross-file resolution.
+        let all_resolved = super::import_resolver::resolve_all_references(
             &file_imports,
             &file_symbols,
+            &references, // pass raw extractor refs for resolution
             &self.project_root,
         );
-        references.extend(import_refs);
+        // Replace raw refs with resolved ones (resolve_all_references includes
+        // both import refs and resolved call/hierarchy refs).
+        references = all_resolved;
 
         // Post-processing: infer module boundaries
         let module_boundaries = super::module_inference::infer_module_boundaries(
@@ -155,6 +159,14 @@ impl CodeModelBuilder {
 
         let language = dominant_language_from_counts(&lang_counts);
 
+        // Compute resolution statistics
+        let resolved_references = references.iter().filter(|r| r.confidence > 0.0).count();
+        let avg_resolution_confidence = if references.is_empty() {
+            0.0
+        } else {
+            references.iter().map(|r| r.confidence).sum::<f64>() / references.len() as f64
+        };
+
         let stats = CodeModelStats {
             files_analyzed: self.contributions.len(),
             total_interfaces: interfaces.len(),
@@ -165,6 +177,8 @@ impl CodeModelBuilder {
             total_references: references.len(),
             total_data_models: data_models.len(),
             total_modules: module_boundaries.len(),
+            resolved_references,
+            avg_resolution_confidence,
         };
 
         let component = Component {

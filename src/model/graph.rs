@@ -18,7 +18,7 @@ use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 
 use super::types::{
-    DataModelKind, HttpMethod, ReferenceKind, SymbolKind, CodeModel,
+    CodeModel, DataModelKind, HttpMethod, ReferenceKind, SymbolKind,
 };
 
 // ---------------------------------------------------------------------------
@@ -141,6 +141,39 @@ impl GraphEdge {
 }
 
 // ---------------------------------------------------------------------------
+// Weighted edge (kind + confidence)
+// ---------------------------------------------------------------------------
+
+/// An edge carrying both its semantic kind and a confidence score.
+///
+/// Structural edges (`Defines`, `Contains`, `Exposes`, `DependsOn`) always
+/// have `confidence: 1.0` because they are derived from syntax, not heuristic
+/// resolution. Reference-derived edges (`Calls`, `Extends`, `Implements`,
+/// `UsesType`, `Imports`) inherit the resolver's confidence score.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WeightedEdge {
+    /// The semantic edge kind.
+    pub kind: GraphEdge,
+    /// Resolution confidence in \[0.0, 1.0\].
+    pub confidence: f64,
+}
+
+impl WeightedEdge {
+    /// Create a structural edge with perfect confidence (1.0).
+    pub fn structural(kind: GraphEdge) -> Self {
+        Self {
+            kind,
+            confidence: 1.0,
+        }
+    }
+
+    /// Create an edge from a reference with its resolution confidence.
+    pub fn from_reference(kind: GraphEdge, confidence: f64) -> Self {
+        Self { kind, confidence }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Node identity for deduplication
 // ---------------------------------------------------------------------------
 
@@ -185,6 +218,12 @@ pub struct AffectedNode {
     pub depth: usize,
     /// The edge type through which this node was reached.
     pub edge_type: GraphEdge,
+    /// Cumulative confidence along the path from root to this node.
+    ///
+    /// Computed as the product of all edge confidences along the BFS path.
+    /// A value of 1.0 means all edges were structural; lower values indicate
+    /// heuristic resolution was involved.
+    pub confidence: f64,
 }
 
 /// A cycle detected by Tarjan's SCC algorithm.
@@ -237,7 +276,7 @@ pub struct GraphStats {
 /// and impact analysis. Supports structural analysis (cycle detection via
 /// Tarjan's SCC) for ARC-001 policy enforcement.
 pub struct KnowledgeGraph {
-    graph: DiGraph<GraphNode, GraphEdge>,
+    graph: DiGraph<GraphNode, WeightedEdge>,
     node_index: HashMap<NodeKey, NodeIndex>,
 }
 
@@ -290,7 +329,7 @@ impl KnowledgeGraph {
                         line: symbol.anchor.line,
                     },
                 );
-                kg.graph.add_edge(file_idx, sym_idx, GraphEdge::Defines);
+                kg.graph.add_edge(file_idx, sym_idx, WeightedEdge::structural(GraphEdge::Defines));
             }
 
             // Step 4: Interface nodes + Defines edges
@@ -312,7 +351,7 @@ impl KnowledgeGraph {
                         line: iface.anchor.line,
                     },
                 );
-                kg.graph.add_edge(file_idx, iface_idx, GraphEdge::Defines);
+                kg.graph.add_edge(file_idx, iface_idx, WeightedEdge::structural(GraphEdge::Defines));
             }
 
             // Step 5: DataModel nodes + Defines edges
@@ -330,7 +369,7 @@ impl KnowledgeGraph {
                         line: model.anchor.line,
                     },
                 );
-                kg.graph.add_edge(file_idx, model_idx, GraphEdge::Defines);
+                kg.graph.add_edge(file_idx, model_idx, WeightedEdge::structural(GraphEdge::Defines));
             }
 
             // Step 6: Process References
@@ -927,6 +966,8 @@ mod tests {
                         target_file: Some(PathBuf::from("src/services.ts")),
                         target_line: Some(10),
                         reference_kind: ReferenceKind::Call,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     },
                     Reference {
                         source_symbol: "getUser".into(),
@@ -936,6 +977,8 @@ mod tests {
                         target_file: Some(PathBuf::from("src/utils.ts")),
                         target_line: Some(1),
                         reference_kind: ReferenceKind::Call,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     },
                     // External call
                     Reference {
@@ -946,6 +989,8 @@ mod tests {
                         target_file: None,
                         target_line: None,
                         reference_kind: ReferenceKind::Call,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     },
                     // Type hierarchy: AdminService extends UserService
                     Reference {
@@ -956,6 +1001,8 @@ mod tests {
                         target_file: Some(PathBuf::from("src/services.ts")),
                         target_line: Some(1),
                         reference_kind: ReferenceKind::Extends,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     },
                     // Import
                     Reference {
@@ -966,6 +1013,8 @@ mod tests {
                         target_file: Some(PathBuf::from("src/services.ts")),
                         target_line: Some(1),
                         reference_kind: ReferenceKind::Import,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     },
                 ],
                 data_models: vec![DataModel {
@@ -1011,6 +1060,8 @@ mod tests {
                 total_references: 5,
                 total_data_models: 1,
                 total_modules: 2,
+                resolved_references: 0,
+                avg_resolution_confidence: 0.0,
             },
         }
     }
@@ -1044,6 +1095,8 @@ mod tests {
                 total_references: 0,
                 total_data_models: 0,
                 total_modules: 0,
+                resolved_references: 0,
+                avg_resolution_confidence: 0.0,
             },
         };
 
@@ -1346,6 +1399,8 @@ mod tests {
                         target_file: Some(PathBuf::from("b.ts")),
                         target_line: Some(1),
                         reference_kind: ReferenceKind::Call,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     },
                     Reference {
                         source_symbol: "funcB".into(),
@@ -1355,6 +1410,8 @@ mod tests {
                         target_file: Some(PathBuf::from("a.ts")),
                         target_line: Some(1),
                         reference_kind: ReferenceKind::Call,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     },
                 ],
                 data_models: vec![],
@@ -1370,6 +1427,8 @@ mod tests {
                 total_references: 2,
                 total_data_models: 0,
                 total_modules: 0,
+                resolved_references: 0,
+                avg_resolution_confidence: 0.0,
             },
         };
 
@@ -1418,6 +1477,8 @@ mod tests {
                 total_references: 0,
                 total_data_models: 0,
                 total_modules: 2,
+                resolved_references: 0,
+                avg_resolution_confidence: 0.0,
             },
         };
 
@@ -1507,6 +1568,8 @@ mod tests {
                     target_file: Some(PathBuf::from("math.ts")),
                     target_line: Some(1),
                     reference_kind: ReferenceKind::Call,
+                    confidence: 0.0,
+                    resolution_method: ResolutionMethod::Unresolved,
                 }],
                 data_models: vec![],
                 module_boundaries: vec![],
@@ -1521,6 +1584,8 @@ mod tests {
                 total_references: 1,
                 total_data_models: 0,
                 total_modules: 0,
+                resolved_references: 0,
+                avg_resolution_confidence: 0.0,
             },
         };
 

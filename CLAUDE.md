@@ -59,7 +59,7 @@ intently-core/
 │       ├── mod.rs
 │       └── pattern_engine.rs
 ├── tests/
-│   ├── fixtures/           # 15 multi-file projects across 16 languages
+│   ├── fixtures/           # 20 multi-file projects across 16 languages
 │   ├── full_extraction.rs  # Integration tests: full pipeline per language
 │   └── real_world_validation.rs  # Real GitHub repo validation (#[ignore])
 ├── docs/

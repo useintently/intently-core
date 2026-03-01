@@ -27,10 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `regex` dependency (was only used by policy engine)
 - `.claude/` cleanup: removed 4 rules (devops-ci, frontend, tauri, schema), 7 skills (policy/evidence/intent/frontend/tauri-ipc/task-protocol/ci review), 4 agents (priya/jun/dara/maren), 3 hooks (crate-boundary-guard, protect-schemas, intent-guard)
 - Removed npm/npx/pnpm/vitest/cargo-tauri/wasm-pack/trunk from allowed permissions
-- MCP server (`intently_mcp`) — moved to separate repository
-- Cross-language policy verification integration tests (belong in policy crate)
-- `regex` dependency (was only used by policy engine)
-
 ### Added
 - Realtime code analysis engine with <250ms incremental analysis target
 - Multi-language parser supporting 16 languages: TypeScript, TSX, JavaScript, JSX, Python, Java, C#, Go, Rust, PHP, Ruby, Kotlin, Swift, C, C++, Scala
@@ -55,10 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JSON-RPC 2.0 server over stdin/stdout for IDE integration
 - CLI binary with debounced event loop (50ms window) using crossbeam channels
 - C# `ILogger<T>` log methods (`LogInformation`, `LogWarning`, `LogError`, `LogDebug`, `LogTrace`, `LogCritical`) added to log sink detection patterns
-- 15 multi-file e-commerce fixture projects (56 files total) covering all 16 supported languages for integration testing
-- 23 integration tests exercising full extraction pipeline across Express, FastAPI, Flask, Django, Spring Boot, Kotlin Spring, ASP.NET Core, Gin, Echo, net/http, Laravel, Rails, and generic fallback languages
+- 20 multi-file fixture projects (61 files total) covering all 16 supported languages for integration testing
+- 21 integration tests exercising full extraction pipeline across Express, NestJS, FastAPI, Flask, Django, Spring Boot, Kotlin Spring, ASP.NET Core (controllers + Minimal API), Gin, Echo, net/http, Laravel (including resource routes), Rails, and generic fallback languages
 - Cross-language policy verification tests (SEC-001, SEC-002, REL-001) validating policy engine against real fixture projects
-- 213 total tests (183 unit + 23 integration + 7 CLI) covering all modules including 7 dedicated backend framework extractors
+- 330 total tests (309 unit + 21 integration + 20 ignored real-world) covering all modules including 7 dedicated backend framework extractors
 - Incremental tree-sitter parsing with `InputEdit` computation via `similar` crate byte-level diffing — reduces re-parse time from O(file_size) to O(edit_size)
 - Tree cache (`HashMap<PathBuf, tree_sitter::Tree>`) in `IntentlyEngine` for storing parsed CSTs across changes
 - Per-file SEC-003 secret scanning cache — only re-scans changed files instead of entire codebase on every change
@@ -91,7 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `references`, `data_models`, `module_boundaries` fields on `Component` and `FileExtraction`
 - `total_references`, `total_data_models`, `total_modules` fields on `TwinStats`
 - `ast-grep-core` integration for YAML-based structural code search patterns
-- 479 total test runs (7 CLI + 335 core unit + 23 integration + 57 MCP unit + 57 MCP integration)
+- NestJS integration test fixture (`tests/fixtures/nestjs_api/`) with 4 controller/service files exercising decorator-based routing, class-level `@UseGuards`, and path composition
+- ASP.NET Minimal API integration test fixture (`tests/fixtures/aspnet_ecommerce/Program.cs`) exercising `MapGet`/`MapPost`/`MapDelete` with `.RequireAuthorization()` chaining
+- Laravel integration test fixture extended with `Route::resource()`, `Route::apiResource()`, and `Route::any()` patterns
 - Real-world validation harness: 20 `#[ignore]` integration tests cloning 22 GitHub projects across all 16 supported languages, validating extraction on real codebases with automatic cleanup via `TempDir`
 - ADR-001: Extractor gaps documentation from real-world MCP validation against 8 GitHub repos — 6 gaps identified with priority matrix (ADR-001)
 - NestJS decorator-based routing: `@Controller`, `@Get`/`@Post`/`@Put`/`@Delete`/`@Patch`/`@Options`/`@Head`/`@All` with path composition and `@UseGuards` auth detection (ADR-001 GAP-01)
@@ -135,6 +133,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Component` struct now includes `imports: Vec<ImportInfo>` (previously dropped during twin build)
 - `TwinStats` struct now includes `total_imports: usize` field
 - Workspace expanded to 3 crates: `intently_core`, `intently_cli`, `intently_mcp`
+- Updated tree-sitter grammars to latest patch versions: java 0.23→0.23.5, c-sharp 0.23→0.23.1, ruby 0.23→0.23.1, cpp 0.23→0.23.4, swift 0.7→0.7.1, php 0.24→0.24.2
+- Integration test suite expanded from 20 to 21 tests with addition of NestJS decorator routing test
+- ASP.NET integration test now validates Minimal API endpoints (`/health`, `/api/v1/catalog/categories`, `/api/v1/catalog/import`, `/api/v1/cache/{key}`) alongside controller routes
+- Laravel integration test now validates `Route::resource()` (7 expanded routes), `Route::apiResource()` (5 expanded routes), and `Route::any()` with `HttpMethod::All`
 
 ### Fixed
 - NestJS projects now produce endpoints instead of 0 — full decorator-based routing extraction (ADR-001 GAP-01)

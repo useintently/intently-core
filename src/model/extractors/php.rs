@@ -481,6 +481,6 @@ Log::info("Processing payment for: " . $request->email);
         assert!(ext.interfaces[0].auth.is_none()); // /health
         assert!(ext.interfaces[1].auth.is_some()); // /api/payments
         assert_eq!(ext.dependencies.len(), 1); // Http::post
-        assert!(ext.sinks.len() >= 1); // Log::info
+        assert!(!ext.sinks.is_empty()); // Log::info
     }
 }

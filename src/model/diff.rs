@@ -234,6 +234,8 @@ mod tests {
                 total_references: 0,
                 total_data_models: 0,
                 total_modules: 0,
+                resolved_references: 0,
+                avg_resolution_confidence: 0.0,
             },
         }
     }

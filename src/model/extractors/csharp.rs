@@ -845,6 +845,6 @@ public class ProductsController : ControllerBase {
         let authed: Vec<_> = ext.interfaces.iter().filter(|i| i.auth.is_some()).collect();
         assert_eq!(authed.len(), 2);
         assert_eq!(ext.dependencies.len(), 1);
-        assert!(ext.sinks.len() >= 1);
+        assert!(!ext.sinks.is_empty());
     }
 }

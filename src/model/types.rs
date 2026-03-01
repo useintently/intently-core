@@ -9,6 +9,30 @@ use serde::{Deserialize, Serialize};
 
 use crate::parser::SupportedLanguage;
 
+// ---------------------------------------------------------------------------
+// Resolution confidence types
+// ---------------------------------------------------------------------------
+
+/// How a reference target was resolved to a concrete file/symbol.
+///
+/// Ordered by decreasing confidence. Downstream consumers can filter
+/// on resolution method to select only high-quality edges.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionMethod {
+    /// Resolved via an explicit import statement (highest confidence).
+    ImportBased,
+    /// Resolved to a symbol in the same file.
+    SameFile,
+    /// Resolved to a globally unique symbol name.
+    GlobalUnique,
+    /// Multiple global matches — resolved to best heuristic pick.
+    GlobalAmbiguous,
+    /// Could not be resolved to any known symbol.
+    #[default]
+    Unresolved,
+}
+
 /// Precise source location anchoring a semantic fact to the CST.
 ///
 /// Every extracted artifact (route, dependency, sink, symbol, data model) carries
@@ -236,7 +260,11 @@ pub enum SymbolKind {
 /// References form the edges of the knowledge graph, connecting symbols
 /// across files and modules. The `source_symbol` is the origin (caller,
 /// subclass) and `target_symbol` is the destination (callee, superclass).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// Each reference carries a `confidence` score (0.0–1.0) and a
+/// `resolution_method` indicating how the target was resolved.
+/// Downstream consumers can filter low-confidence edges to reduce noise.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Reference {
     /// Enclosing symbol at the call/usage site (e.g., the function that
     /// contains a call expression). Empty string if at module level.
@@ -253,6 +281,15 @@ pub struct Reference {
     pub target_line: Option<usize>,
     /// What kind of relationship this reference represents.
     pub reference_kind: ReferenceKind,
+    /// Confidence that this reference is correctly resolved (0.0–1.0).
+    ///
+    /// 0.0 = unresolved, 1.0 = certain. Import-based: 0.95, same-file: 0.90,
+    /// global-unique: 0.80, global-ambiguous: 0.40.
+    #[serde(default)]
+    pub confidence: f64,
+    /// How this reference's target was resolved.
+    #[serde(default)]
+    pub resolution_method: ResolutionMethod,
 }
 
 /// Classification of a reference relationship.
@@ -351,6 +388,12 @@ pub struct CodeModelStats {
     pub total_references: usize,
     pub total_data_models: usize,
     pub total_modules: usize,
+    /// Number of references that were resolved to a concrete target.
+    #[serde(default)]
+    pub resolved_references: usize,
+    /// Average confidence across all references (0.0 if no references).
+    #[serde(default)]
+    pub avg_resolution_confidence: f64,
 }
 
 /// Extraction results from a single source file, prior to aggregation.
@@ -411,6 +454,8 @@ mod tests {
                 total_references: 0,
                 total_data_models: 0,
                 total_modules: 0,
+                resolved_references: 0,
+                avg_resolution_confidence: 0.0,
             },
         };
 
@@ -605,6 +650,8 @@ mod tests {
             target_file: Some(PathBuf::from("src/validation.rs")),
             target_line: Some(10),
             reference_kind: ReferenceKind::Call,
+            confidence: 0.0,
+            resolution_method: ResolutionMethod::Unresolved,
         };
 
         let json = serde_json::to_string(&reference).unwrap();
@@ -639,6 +686,8 @@ mod tests {
             target_file: None,
             target_line: None,
             reference_kind: ReferenceKind::Call,
+            confidence: 0.0,
+            resolution_method: ResolutionMethod::Unresolved,
         };
 
         let json = serde_json::to_string(&reference).unwrap();

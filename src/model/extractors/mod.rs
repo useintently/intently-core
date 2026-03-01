@@ -15,6 +15,7 @@ pub mod data_models;
 pub mod generic;
 pub mod go;
 pub mod java;
+pub mod language_behavior;
 pub mod php;
 pub mod python;
 pub mod ruby;

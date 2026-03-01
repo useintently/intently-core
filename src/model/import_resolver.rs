@@ -15,7 +15,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::types::{ImportInfo, Reference, ReferenceKind, Symbol};
+use super::symbol_table::{self, SymbolTable};
+use super::types::{ImportInfo, Reference, ReferenceKind, ResolutionMethod, Symbol};
 
 /// File extensions to try when resolving a relative import path.
 ///
@@ -78,6 +79,97 @@ pub fn resolve_imports(
     });
 
     references
+}
+
+/// Resolve all references: import refs + call/hierarchy refs via SymbolTable.
+///
+/// Two-phase resolution:
+/// 1. **Import resolution** (existing logic) — produces Import refs with confidence
+/// 2. **Call/hierarchy resolution** — uses SymbolTable to resolve Call, Extends,
+///    Implements, TypeUsage refs that extractors left as unresolved
+///
+/// The `unresolved_refs` parameter contains raw references from extractors
+/// (calls, extends, implements) with `target_file: None`.
+pub fn resolve_all_references(
+    file_imports: &HashMap<PathBuf, Vec<ImportInfo>>,
+    file_symbols: &HashMap<PathBuf, Vec<Symbol>>,
+    unresolved_refs: &[Reference],
+    project_root: &Path,
+) -> Vec<Reference> {
+    // Phase 1: Import resolution (existing logic)
+    let import_refs = resolve_imports(file_imports, file_symbols, project_root);
+
+    // Build symbol table for Phase 2
+    let symbol_table = SymbolTable::from_file_symbols(file_symbols);
+
+    // Phase 2: Resolve call/hierarchy references
+    let mut resolved_refs: Vec<Reference> = Vec::with_capacity(unresolved_refs.len());
+
+    for reference in unresolved_refs {
+        // Skip import refs — those were handled in Phase 1
+        if reference.reference_kind == ReferenceKind::Import {
+            continue;
+        }
+
+        // Build per-file import index for this source file
+        let imports_for_file = file_imports
+            .get(&reference.source_file)
+            .map(|imps| {
+                symbol_table::build_import_index(
+                    &reference.source_file,
+                    imps,
+                    file_symbols,
+                    project_root,
+                )
+            })
+            .unwrap_or_default();
+
+        // Resolve via symbol table
+        let result = symbol_table.resolve(
+            &reference.target_symbol,
+            &reference.source_file,
+            &imports_for_file,
+        );
+
+        let (target_file, target_line) = match result.location {
+            Some(loc) => (Some(loc.file), Some(loc.line)),
+            None => (reference.target_file.clone(), reference.target_line),
+        };
+
+        // Use the higher confidence: keep original if already resolved
+        let (confidence, method) = if reference.confidence > result.confidence {
+            (reference.confidence, reference.resolution_method)
+        } else {
+            (result.confidence, result.method)
+        };
+
+        resolved_refs.push(Reference {
+            source_symbol: reference.source_symbol.clone(),
+            source_file: reference.source_file.clone(),
+            source_line: reference.source_line,
+            target_symbol: reference.target_symbol.clone(),
+            target_file,
+            target_line,
+            reference_kind: reference.reference_kind,
+            confidence,
+            resolution_method: method,
+        });
+    }
+
+    // Combine import refs + resolved call/hierarchy refs
+    let mut all_refs = import_refs;
+    all_refs.extend(resolved_refs);
+
+    // Sort for deterministic output
+    all_refs.sort_by(|a, b| {
+        (&a.source_file, a.source_line, &a.target_symbol).cmp(&(
+            &b.source_file,
+            b.source_line,
+            &b.target_symbol,
+        ))
+    });
+
+    all_refs
 }
 
 /// Build an index mapping symbol names to their (file, line) locations.
@@ -144,6 +236,16 @@ fn resolve_relative_import(
                 None => (None, None),
             };
 
+            // Confidence scoring for import references:
+            // - File resolved + symbol found: 0.95 (import-based, high confidence)
+            // - File resolved + symbol NOT found: 0.50 (file known, symbol missing)
+            // - File NOT resolved: 0.0 (unresolved relative import)
+            let (confidence, resolution_method) = match (&target_file, target_line) {
+                (Some(_), Some(_)) => (0.95, ResolutionMethod::ImportBased),
+                (Some(_), None) => (0.50, ResolutionMethod::ImportBased),
+                _ => (0.0, ResolutionMethod::Unresolved),
+            };
+
             Reference {
                 source_symbol: String::new(),
                 source_file: importing_file.to_path_buf(),
@@ -152,6 +254,8 @@ fn resolve_relative_import(
                 target_file,
                 target_line,
                 reference_kind: ReferenceKind::Import,
+                confidence,
+                resolution_method,
             }
         })
         .collect()
@@ -178,6 +282,8 @@ fn resolve_external_import(
             target_file: None,
             target_line: None,
             reference_kind: ReferenceKind::Import,
+            confidence: 0.0,
+            resolution_method: ResolutionMethod::Unresolved,
         })
         .collect()
 }

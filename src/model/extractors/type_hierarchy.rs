@@ -17,7 +17,7 @@ use std::path::Path;
 use tree_sitter::{Node, Tree};
 
 use crate::parser::SupportedLanguage;
-use crate::model::types::{Reference, ReferenceKind};
+use crate::model::types::{Reference, ReferenceKind, ResolutionMethod};
 
 use super::common::node_text;
 
@@ -143,6 +143,8 @@ fn extract_ts_heritage(
                                     target_file: None,
                                     target_line: None,
                                     reference_kind: ReferenceKind::Extends,
+                                    confidence: 0.0,
+                                    resolution_method: ResolutionMethod::Unresolved,
                                 });
                             }
                         }
@@ -174,6 +176,8 @@ fn extract_ts_heritage(
                                     target_file: None,
                                     target_line: None,
                                     reference_kind: ReferenceKind::Implements,
+                                    confidence: 0.0,
+                                    resolution_method: ResolutionMethod::Unresolved,
                                 });
                             }
                         }
@@ -227,6 +231,8 @@ fn extract_python_class_hierarchy(
                         target_file: None,
                         target_line: None,
                         reference_kind: ReferenceKind::Extends,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     });
                 }
             }
@@ -385,6 +391,8 @@ fn extract_csharp_class_hierarchy(
                                 target_file: None,
                                 target_line: None,
                                 reference_kind: kind,
+                                confidence: 0.0,
+                                resolution_method: ResolutionMethod::Unresolved,
                             });
                         }
                     }
@@ -460,6 +468,8 @@ fn extract_go_embedding(
                         target_file: None,
                         target_line: None,
                         reference_kind: ReferenceKind::Extends,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     });
                 }
             }
@@ -508,6 +518,8 @@ fn extract_rust_impl_for(
         target_file: None,
         target_line: None,
         reference_kind: ReferenceKind::Implements,
+        confidence: 0.0,
+        resolution_method: ResolutionMethod::Unresolved,
     });
 }
 
@@ -538,6 +550,8 @@ fn extract_type_identifiers_from(
                         target_file: None,
                         target_line: None,
                         reference_kind: kind,
+                        confidence: 0.0,
+                        resolution_method: ResolutionMethod::Unresolved,
                     });
                 }
                 // Recurse into intermediate nodes (type_list, generic_type, etc.)

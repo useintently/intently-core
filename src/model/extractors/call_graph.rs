@@ -10,7 +10,7 @@ use std::path::Path;
 use tree_sitter::{Node, Tree};
 
 use crate::parser::SupportedLanguage;
-use crate::model::types::{Reference, ReferenceKind, Symbol};
+use crate::model::types::{Reference, ReferenceKind, ResolutionMethod, Symbol};
 
 use super::common::{is_call_node, node_text};
 
@@ -56,6 +56,8 @@ fn walk_for_calls(
                 target_file: None,
                 target_line: None,
                 reference_kind: ReferenceKind::Call,
+                confidence: 0.0,
+                resolution_method: ResolutionMethod::Unresolved,
             });
         }
     }

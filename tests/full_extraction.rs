@@ -144,6 +144,96 @@ fn jsx_app_extracts_http_calls_and_sinks() {
     );
 }
 
+#[test]
+fn nestjs_api_extracts_decorator_routes_auth_sinks() {
+    let result = analyze_fixture("nestjs_api");
+    let model = &result.model;
+
+    assert!(
+        result.files_analyzed >= 4,
+        "Expected at least 4 TS files analyzed, got {}",
+        result.files_analyzed
+    );
+
+    // Should extract NestJS decorator-based routes from all controllers
+    let routes = &model.components[0].interfaces;
+    assert!(
+        routes.len() >= 11,
+        "NestJS project should have >=11 routes, got {}",
+        routes.len()
+    );
+
+    // Should have authenticated routes (class-level and method-level @UseGuards)
+    let authed = routes.iter().filter(|r| r.auth.is_some()).count();
+    assert!(
+        authed >= 8,
+        "Expected >=8 authenticated NestJS routes, got {}",
+        authed
+    );
+
+    // Should have public routes (health check, user findOne, user create)
+    let public = routes.iter().filter(|r| r.auth.is_none()).count();
+    assert!(
+        public >= 2,
+        "Expected >=2 public NestJS routes, got {}",
+        public
+    );
+
+    // Auth should use AuthKind::Decorator for NestJS
+    let decorator_auth = routes
+        .iter()
+        .filter(|r| matches!(&r.auth, Some(AuthKind::Decorator(_))))
+        .count();
+    assert!(
+        decorator_auth >= 8,
+        "NestJS auth should use AuthKind::Decorator, got {} decorator auths",
+        decorator_auth
+    );
+
+    // Should detect HTTP calls in the service file (fetch to Stripe)
+    let http_calls = &model.components[0].dependencies;
+    assert!(
+        http_calls.len() >= 2,
+        "Expected >=2 HTTP calls (Stripe API), got {}",
+        http_calls.len()
+    );
+
+    // Should detect log sinks across controller and service files
+    let sinks = &model.components[0].sinks;
+    assert!(
+        sinks.len() >= 4,
+        "Expected >=4 log sinks, got {}",
+        sinks.len()
+    );
+
+    // Should detect PII in some sinks (email references)
+    let pii_sinks = sinks.iter().filter(|s| s.contains_pii).count();
+    assert!(
+        pii_sinks >= 1,
+        "Expected >=1 PII-containing sinks, got {}",
+        pii_sinks
+    );
+
+    // Should have multiple HTTP methods
+    let methods: Vec<_> = routes.iter().map(|r| &r.method).collect();
+    assert!(methods.contains(&&HttpMethod::Get));
+    assert!(methods.contains(&&HttpMethod::Post));
+    assert!(methods.contains(&&HttpMethod::Delete));
+
+    // Verify specific NestJS paths include controller prefix
+    let paths: Vec<&str> = routes.iter().map(|r| r.path.as_str()).collect();
+    assert!(
+        paths.contains(&"/api/articles"),
+        "Should have /api/articles path, got {:?}",
+        paths
+    );
+    assert!(
+        paths.contains(&"/api/articles/:slug"),
+        "Should have /api/articles/:slug path, got {:?}",
+        paths
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Python Family
 // ═══════════════════════════════════════════════════════════════════
@@ -383,23 +473,34 @@ fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
     let model = &result.model;
 
     assert!(
-        result.files_analyzed >= 4,
-        "Expected at least 4 C# files analyzed, got {}",
+        result.files_analyzed >= 5,
+        "Expected at least 5 C# files analyzed (controllers + services + Program.cs), got {}",
         result.files_analyzed
     );
 
     let routes = &model.components[0].interfaces;
     assert!(
-        routes.len() >= 15,
-        "ASP.NET project should have ≥15 routes, got {}",
+        routes.len() >= 18,
+        "ASP.NET project should have ≥18 routes (controllers + Minimal API), got {}",
         routes.len()
     );
 
-    // Should have [Authorize] attributes
+    // Minimal API routes from Program.cs
+    let minimal_api_paths = ["/health", "/api/v1/catalog/categories", "/api/v1/catalog/import", "/api/v1/cache/{key}"];
+    for path in &minimal_api_paths {
+        assert!(
+            routes.iter().any(|r| r.path == *path),
+            "Expected Minimal API route '{}' to be extracted, found routes: {:?}",
+            path,
+            routes.iter().map(|r| &r.path).collect::<Vec<_>>()
+        );
+    }
+
+    // Should have auth (controllers [Authorize] + Minimal API RequireAuthorization)
     let authed = routes.iter().filter(|r| r.auth.is_some()).count();
     assert!(
-        authed >= 5,
-        "Expected ≥5 ASP.NET routes with [Authorize], got {}",
+        authed >= 7,
+        "Expected ≥7 ASP.NET routes with auth (controllers + Minimal API), got {}",
         authed
     );
 
@@ -409,8 +510,8 @@ fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
         .filter(|r| matches!(&r.auth, Some(AuthKind::Attribute(_))))
         .count();
     assert!(
-        attribute_auth >= 3,
-        "Expected ≥3 routes with AuthKind::Attribute, got {}",
+        attribute_auth >= 5,
+        "Expected ≥5 routes with AuthKind::Attribute, got {}",
         attribute_auth
     );
 
@@ -534,9 +635,10 @@ fn laravel_ecommerce_extracts_routes_middleware_httpcalls_sinks() {
     );
 
     let routes = &model.components[0].interfaces;
+    // 15+ explicit routes + 7 (resource) + 5 (apiResource) + 1 (any) = 28+
     assert!(
-        routes.len() >= 15,
-        "Laravel project should have ≥15 Route:: definitions, got {}",
+        routes.len() >= 28,
+        "Laravel project should have ≥28 Route:: definitions (including resource/apiResource), got {}",
         routes.len()
     );
 
@@ -546,6 +648,44 @@ fn laravel_ecommerce_extracts_routes_middleware_httpcalls_sinks() {
         authed >= 3,
         "Expected ≥3 Laravel routes with ->middleware('auth'), got {}",
         authed
+    );
+
+    // Route::resource('tickets', ...) expands to 7 routes with auth middleware
+    let ticket_routes: Vec<_> = routes
+        .iter()
+        .filter(|r| r.path.starts_with("/tickets"))
+        .collect();
+    assert_eq!(
+        ticket_routes.len(),
+        7,
+        "Route::resource('tickets') should expand to 7 routes, got {}",
+        ticket_routes.len()
+    );
+    assert!(
+        ticket_routes.iter().all(|r| r.auth.is_some()),
+        "All resource('tickets') routes should inherit ->middleware('auth')"
+    );
+
+    // Route::apiResource('notifications', ...) expands to 5 routes
+    let notification_routes: Vec<_> = routes
+        .iter()
+        .filter(|r| r.path.starts_with("/notifications"))
+        .collect();
+    assert_eq!(
+        notification_routes.len(),
+        5,
+        "Route::apiResource('notifications') should expand to 5 routes, got {}",
+        notification_routes.len()
+    );
+
+    // Route::any() produces HttpMethod::All
+    let any_routes: Vec<_> = routes
+        .iter()
+        .filter(|r| r.method == HttpMethod::All)
+        .collect();
+    assert!(
+        !any_routes.is_empty(),
+        "Expected at least 1 Route::any() with HttpMethod::All"
     );
 
     // HTTP calls (Http::get, Http::post)
