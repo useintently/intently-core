@@ -99,6 +99,19 @@ pub trait LanguageBehavior: Send + Sync {
     fn call_node_kinds(&self) -> &[&str] {
         &["call_expression"]
     }
+
+    /// Determine whether a symbol definition node represents a test function.
+    ///
+    /// Language-specific detection patterns include:
+    /// - **Naming conventions:** `test_*` (Python, Ruby, PHP), `Test*` (Go)
+    /// - **Annotations/attributes:** `@Test` (Java/Kotlin), `[Test]`/`[Fact]`/`[Theory]` (C#),
+    ///   `#[test]` (Rust), `#[Test]` (PHP)
+    /// - **File heuristic:** TS/JS functions named `test*` in test files
+    ///
+    /// Returns `false` by default (GenericBehavior and languages without test patterns).
+    fn is_test_symbol(&self, _node: &Node, _source: &str, _symbol_name: &str) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +145,14 @@ impl LanguageBehavior for TypeScriptBehavior {
 
     fn call_node_kinds(&self) -> &[&str] {
         &["call_expression"]
+    }
+
+    /// TS/JS: functions named `test*` are considered test symbols.
+    ///
+    /// This is a name-prefix heuristic. BDD-style `describe`/`it` blocks
+    /// are call_expressions, not function_declarations — not detected here.
+    fn is_test_symbol(&self, _node: &Node, _source: &str, symbol_name: &str) -> bool {
+        symbol_name.starts_with("test")
     }
 }
 
@@ -170,6 +191,11 @@ impl LanguageBehavior for PythonBehavior {
     fn call_node_kinds(&self) -> &[&str] {
         &["call"]
     }
+
+    /// Python: `def test_*` or methods inside `unittest.TestCase` subclasses.
+    fn is_test_symbol(&self, _node: &Node, _source: &str, symbol_name: &str) -> bool {
+        symbol_name.starts_with("test_") || symbol_name.starts_with("test")
+    }
 }
 
 /// Behavior for Java and Kotlin.
@@ -190,6 +216,11 @@ impl LanguageBehavior for JavaBehavior {
 
     fn call_node_kinds(&self) -> &[&str] {
         &["method_invocation"]
+    }
+
+    /// Java/Kotlin: check for `@Test` annotation on the preceding sibling.
+    fn is_test_symbol(&self, node: &Node, source: &str, _symbol_name: &str) -> bool {
+        has_preceding_annotation(node, source, &["Test"])
     }
 }
 
@@ -228,6 +259,11 @@ impl LanguageBehavior for CSharpBehavior {
 
     fn call_node_kinds(&self) -> &[&str] {
         &["invocation_expression"]
+    }
+
+    /// C#: check for `[Test]`, `[Fact]`, or `[Theory]` attributes.
+    fn is_test_symbol(&self, node: &Node, source: &str, _symbol_name: &str) -> bool {
+        has_preceding_attribute(node, source, &["Test", "Fact", "Theory"])
     }
 }
 
@@ -274,6 +310,26 @@ impl LanguageBehavior for GoBehavior {
     fn call_node_kinds(&self) -> &[&str] {
         &["call_expression"]
     }
+
+    /// Go: `func Test*(t *testing.T)` — name starts with `Test` and has
+    /// a `testing.T` or `testing.B` or `testing.M` parameter.
+    fn is_test_symbol(&self, node: &Node, source: &str, symbol_name: &str) -> bool {
+        if !symbol_name.starts_with("Test")
+            && !symbol_name.starts_with("Benchmark")
+            && !symbol_name.starts_with("Fuzz")
+        {
+            return false;
+        }
+        // Verify the function signature contains testing.T/B/M/F
+        let text = match node.utf8_text(source.as_bytes()) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        text.contains("testing.T")
+            || text.contains("testing.B")
+            || text.contains("testing.M")
+            || text.contains("testing.F")
+    }
 }
 
 /// Behavior for PHP.
@@ -298,6 +354,14 @@ impl LanguageBehavior for PhpBehavior {
             "function_call_expression",
             "scoped_call_expression",
         ]
+    }
+
+    /// PHP: `function test*()` name prefix or `#[Test]` attribute.
+    fn is_test_symbol(&self, node: &Node, source: &str, symbol_name: &str) -> bool {
+        if symbol_name.starts_with("test") {
+            return true;
+        }
+        has_preceding_attribute(node, source, &["Test"])
     }
 }
 
@@ -324,6 +388,11 @@ impl LanguageBehavior for RubyBehavior {
 
     fn call_node_kinds(&self) -> &[&str] {
         &["call", "method_call"]
+    }
+
+    /// Ruby: `def test_*` naming convention.
+    fn is_test_symbol(&self, _node: &Node, _source: &str, symbol_name: &str) -> bool {
+        symbol_name.starts_with("test_")
     }
 }
 
@@ -356,6 +425,11 @@ impl LanguageBehavior for RustBehavior {
 
     fn call_node_kinds(&self) -> &[&str] {
         &["call_expression"]
+    }
+
+    /// Rust: `#[test]` or `#[tokio::test]` attribute on the function.
+    fn is_test_symbol(&self, node: &Node, source: &str, _symbol_name: &str) -> bool {
+        has_preceding_rust_attribute(node, source, &["test", "tokio::test", "rstest"])
     }
 }
 
@@ -537,6 +611,143 @@ fn extract_name_child(node: &Node, source: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Test detection helpers
+// ---------------------------------------------------------------------------
+
+/// Check for a Java/Kotlin annotation (`@Name`) on a method_declaration node.
+///
+/// Java tree-sitter grammar nests annotations inside `modifiers` child nodes
+/// of the declaration. We walk the node's children looking for `modifiers`
+/// containing `marker_annotation` or `annotation` nodes, and also check
+/// direct preceding siblings (some grammar versions place them there).
+fn has_preceding_annotation(node: &Node, source: &str, names: &[&str]) -> bool {
+    // Strategy 1: Check child `modifiers` node (Java grammar nests annotations here)
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            let kind = child.kind();
+            if kind == "modifiers" {
+                // Walk inside modifiers for annotations
+                for j in 0..child.child_count() {
+                    if let Some(mod_child) = child.child(j as u32) {
+                        if check_annotation_node(&mod_child, source, names) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            // Direct annotation child (some grammar versions)
+            if check_annotation_node(&child, source, names) {
+                return true;
+            }
+        }
+    }
+
+    // Strategy 2: Check preceding siblings (fallback)
+    let mut sib = node.prev_named_sibling();
+    while let Some(s) = sib {
+        if check_annotation_node(&s, source, names) {
+            return true;
+        }
+        let kind = s.kind();
+        if kind != "marker_annotation"
+            && kind != "annotation"
+            && kind != "modifiers"
+            && kind != "modifier"
+        {
+            break;
+        }
+        sib = s.prev_named_sibling();
+    }
+
+    false
+}
+
+/// Check if a single CST node is an annotation matching one of the target names.
+fn check_annotation_node(node: &Node, source: &str, names: &[&str]) -> bool {
+    let kind = node.kind();
+    if kind == "marker_annotation" || kind == "annotation" {
+        if let Ok(text) = node.utf8_text(source.as_bytes()) {
+            let ann_name = text.trim_start_matches('@');
+            for name in names {
+                if ann_name == *name || ann_name.starts_with(&format!("{name}(")) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check for a C# attribute (`[Name]`) on a declaration node.
+///
+/// C# tree-sitter grammar nests attributes as child `attribute_list` nodes
+/// of the declaration. We check both child nodes and preceding siblings.
+fn has_preceding_attribute(node: &Node, source: &str, names: &[&str]) -> bool {
+    // Strategy 1: Check child nodes (C# grammar nests attributes as children)
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            let kind = child.kind();
+            if kind == "attribute_list" || kind == "attribute" {
+                if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                    for name in names {
+                        if text.contains(name) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Strategy 2: Check preceding siblings (fallback)
+    let mut sib = node.prev_named_sibling();
+    while let Some(s) = sib {
+        let kind = s.kind();
+        if kind == "attribute_list" || kind == "attribute" {
+            if let Ok(text) = s.utf8_text(source.as_bytes()) {
+                for name in names {
+                    if text.contains(name) {
+                        return true;
+                    }
+                }
+            }
+        }
+        if kind != "attribute_list" && kind != "attribute" && kind != "modifier" {
+            break;
+        }
+        sib = s.prev_named_sibling();
+    }
+    false
+}
+
+/// Check for a Rust `#[name]` attribute_item preceding the function.
+///
+/// Rust tree-sitter grammar uses `attribute_item` nodes as siblings before
+/// function_item nodes.
+fn has_preceding_rust_attribute(node: &Node, source: &str, names: &[&str]) -> bool {
+    let mut sib = node.prev_named_sibling();
+    while let Some(s) = sib {
+        if s.kind() == "attribute_item" {
+            if let Ok(text) = s.utf8_text(source.as_bytes()) {
+                // text looks like `#[test]` or `#[tokio::test]`
+                let inner = text.trim_start_matches("#[").trim_end_matches(']');
+                for name in names {
+                    if inner == *name || inner.starts_with(&format!("{name}(")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        // Attribute items can be stacked — keep walking
+        if s.kind() != "attribute_item" && s.kind() != "line_comment" {
+            break;
+        }
+        sib = s.prev_named_sibling();
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------

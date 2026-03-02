@@ -12,6 +12,7 @@ pub mod call_graph;
 pub mod common;
 pub mod csharp;
 pub mod data_models;
+pub mod env_detection;
 pub mod generic;
 pub mod go;
 pub mod java;
@@ -79,6 +80,10 @@ pub fn extract(
 
     // Extract data models (classes, structs, interfaces with fields)
     extraction.data_models = data_models::extract_data_models(source, tree, language, file_path);
+
+    // Extract environment variable references
+    extraction.env_dependencies =
+        env_detection::extract_env_dependencies(source, tree, language, file_path);
 
     // Enrich with file role and token estimation
     extraction.file_role = FileRole::from_path(file_path);

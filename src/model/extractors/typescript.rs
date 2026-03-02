@@ -119,11 +119,34 @@ fn try_extract_route(node: &Node, source: &str, file_path: &Path, extraction: &m
 
     let auth = detect_auth_middleware(&args[1..]);
 
+    // The last argument is typically the handler function.
+    // If it's an identifier (named function reference), capture its name.
+    let handler_name = args
+        .last()
+        .and_then(|arg| {
+            let trimmed = arg.text.trim();
+            // Only capture simple identifiers, not arrow functions or other expressions
+            if !trimmed.is_empty()
+                && !trimmed.contains('(')
+                && !trimmed.contains(')')
+                && !trimmed.contains('=')
+                && !trimmed.contains('{')
+                && trimmed.chars().all(|c| c.is_alphanumeric() || c == '_')
+            {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        });
+
     extraction.interfaces.push(Interface {
         method: http_method,
-        path: route_path,
+        path: route_path.clone(),
         auth,
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&route_path),
+        handler_name,
+        request_body_type: None,
     });
 }
 
@@ -332,11 +355,19 @@ fn try_extract_nestjs_method(
     let method_auth = detect_nestjs_auth(&decorators);
     let auth = method_auth.or_else(|| class_auth.clone());
 
+    // Extract the method name from the method_definition node
+    let handler_name = method_node
+        .child_by_field_name("name")
+        .map(|name_node| node_text_ref(&name_node, source).to_string());
+
     extraction.interfaces.push(Interface {
         method: http_method,
-        path,
+        path: path.clone(),
         auth,
         anchor: anchor_from_node(method_node, file_path),
+        parameters: common::extract_path_params(&path),
+        handler_name,
+        request_body_type: None,
     });
 }
 

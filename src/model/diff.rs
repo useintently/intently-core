@@ -225,6 +225,7 @@ mod tests {
                 references: vec![],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 1,
@@ -250,6 +251,9 @@ mod tests {
             path: path.into(),
             auth,
             anchor: SourceAnchor::from_line(PathBuf::from("src/index.ts"), 1),
+            parameters: vec![],
+            handler_name: None,
+            request_body_type: None,
         }
     }
 

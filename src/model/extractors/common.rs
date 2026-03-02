@@ -181,6 +181,83 @@ pub fn try_extract_log_sink(
     }
 }
 
+/// Extract route parameters from a URL path pattern.
+///
+/// Recognizes three common styles used across web frameworks:
+/// - `:param` — Express, Gin, Echo, Rails
+/// - `{param}` — FastAPI, Spring, ASP.NET, Laravel, OpenAPI
+/// - `<param>` or `<type:param>` — Flask
+///
+/// Returns a `RouteParameter` for each unique parameter found, all with
+/// `location: ParameterLocation::Path` and `param_type: None`.
+pub fn extract_path_params(route_path: &str) -> Vec<RouteParameter> {
+    let mut params = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Style 1: `:param` — matches :word characters after / or at start
+    // Must not be inside {} or <> to avoid double-extraction
+    for segment in route_path.split('/') {
+        if let Some(name) = segment.strip_prefix(':') {
+            // Strip optional trailing characters like (regex) in Express
+            let name = name.split('(').next().unwrap_or(name);
+            if !name.is_empty() && seen.insert(name.to_string()) {
+                params.push(RouteParameter {
+                    name: name.to_string(),
+                    location: ParameterLocation::Path,
+                    param_type: None,
+                });
+            }
+        }
+    }
+
+    // Style 2: `{param}` — used by FastAPI, Spring, ASP.NET, Laravel
+    let mut rest = route_path;
+    while let Some(start) = rest.find('{') {
+        if let Some(end) = rest[start..].find('}') {
+            let inner = &rest[start + 1..start + end];
+            // Handle {param:regex} (ASP.NET constraints) — take only the name
+            let name = inner.split(':').next().unwrap_or(inner).trim();
+            if !name.is_empty() && !name.contains(' ') && seen.insert(name.to_string()) {
+                params.push(RouteParameter {
+                    name: name.to_string(),
+                    location: ParameterLocation::Path,
+                    param_type: None,
+                });
+            }
+            rest = &rest[start + end + 1..];
+        } else {
+            break;
+        }
+    }
+
+    // Style 3: `<param>` or `<type:param>` — Flask style
+    rest = route_path;
+    while let Some(start) = rest.find('<') {
+        if let Some(end) = rest[start..].find('>') {
+            let inner = &rest[start + 1..start + end];
+            // Flask uses <type:name>, take the last part after ':'
+            let name = if inner.contains(':') {
+                inner.rsplit(':').next().unwrap_or(inner)
+            } else {
+                inner
+            };
+            let name = name.trim();
+            if !name.is_empty() && !name.contains(' ') && seen.insert(name.to_string()) {
+                params.push(RouteParameter {
+                    name: name.to_string(),
+                    location: ParameterLocation::Path,
+                    param_type: None,
+                });
+            }
+            rest = &rest[start + end + 1..];
+        } else {
+            break;
+        }
+    }
+
+    params
+}
+
 /// Truncate a call expression text to a maximum display length.
 pub fn truncate_call_text(text: String, max_len: usize) -> String {
     if text.len() > max_len {
@@ -205,6 +282,7 @@ pub fn new_extraction(
         symbols: Vec::new(),
         references: Vec::new(),
         data_models: Vec::new(),
+        env_dependencies: Vec::new(),
         file_role: FileRole::Implementation,
         estimated_tokens: 0,
         content_hash: None,
@@ -270,6 +348,68 @@ mod tests {
         assert_eq!(parse_http_method("all"), Some(HttpMethod::All));
         assert_eq!(parse_http_method("unknown"), None);
         assert_eq!(parse_http_method(""), None);
+    }
+
+    #[test]
+    fn extract_path_params_colon_style() {
+        let params = extract_path_params("/users/:id/posts/:postId");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "id");
+        assert_eq!(params[0].location, ParameterLocation::Path);
+        assert!(params[0].param_type.is_none());
+        assert_eq!(params[1].name, "postId");
+    }
+
+    #[test]
+    fn extract_path_params_curly_style() {
+        let params = extract_path_params("/users/{id}");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "id");
+    }
+
+    #[test]
+    fn extract_path_params_curly_with_constraint() {
+        // ASP.NET style: {id:int}
+        let params = extract_path_params("/users/{id:int}/orders/{orderId:guid}");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "id");
+        assert_eq!(params[1].name, "orderId");
+    }
+
+    #[test]
+    fn extract_path_params_flask_angle_style() {
+        let params = extract_path_params("/files/<path:filename>");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "filename");
+    }
+
+    #[test]
+    fn extract_path_params_flask_simple() {
+        let params = extract_path_params("/users/<id>");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "id");
+    }
+
+    #[test]
+    fn extract_path_params_no_params() {
+        let params = extract_path_params("/health");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn extract_path_params_no_duplicates() {
+        // If somehow same param name appears twice, only one should be returned
+        let params = extract_path_params("/users/:id/alias/:id");
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn extract_path_params_mixed_styles_no_double_extract() {
+        // Each param should only be extracted once even with mixed formats
+        let params = extract_path_params("/users/{userId}/posts/:postId");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "postId"); // colon style first
+        assert_eq!(params[1].name, "userId"); // curly style second
     }
 
     #[test]

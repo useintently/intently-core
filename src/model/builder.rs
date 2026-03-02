@@ -31,6 +31,7 @@ struct FileContribution {
     imports: Vec<ImportInfo>,
     references: Vec<Reference>,
     data_models: Vec<DataModel>,
+    env_dependencies: Vec<EnvDependency>,
     file_role: FileRole,
     estimated_tokens: u64,
 }
@@ -237,6 +238,8 @@ impl CodeModelBuilder {
         let mut total_ref_count = 0;
         let mut file_roles: HashMap<String, usize> = HashMap::new();
         let mut total_estimated_tokens: u64 = 0;
+        let mut total_test_symbols: usize = 0;
+        let mut total_env_dependencies: usize = 0;
 
         // Sort component names for deterministic output
         let mut component_names: Vec<&String> = self.components.keys().collect();
@@ -256,6 +259,8 @@ impl CodeModelBuilder {
             total_references += component.references.len();
             total_data_models += component.data_models.len();
             total_modules += component.module_boundaries.len();
+            total_test_symbols += component.symbols.iter().filter(|s| s.is_test).count();
+            total_env_dependencies += component.env_dependencies.len();
             total_resolved_references += component
                 .references
                 .iter()
@@ -325,6 +330,8 @@ impl CodeModelBuilder {
             file_roles,
             total_estimated_tokens,
             total_directories,
+            total_test_symbols,
+            total_env_dependencies,
         };
 
         CodeModel {
@@ -349,6 +356,7 @@ impl CodeModelBuilder {
         let mut imports = Vec::new();
         let mut references = Vec::new();
         let mut data_models = Vec::new();
+        let mut env_dependencies = Vec::new();
         let mut lang_counts: HashMap<SupportedLanguage, usize> = HashMap::new();
 
         // Build per-file maps for post-processing
@@ -363,6 +371,7 @@ impl CodeModelBuilder {
             imports.extend(contribution.imports.iter().cloned());
             references.extend(contribution.references.iter().cloned());
             data_models.extend(contribution.data_models.iter().cloned());
+            env_dependencies.extend(contribution.env_dependencies.iter().cloned());
             *lang_counts.entry(contribution.language).or_insert(0) += 1;
 
             file_imports.insert(path.clone(), contribution.imports.clone());
@@ -418,6 +427,10 @@ impl CodeModelBuilder {
         data_models
             .sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
 
+        env_dependencies.sort_by(|a, b| {
+            (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line))
+        });
+
         let language = dominant_language_from_counts(&lang_counts);
 
         Component {
@@ -431,6 +444,7 @@ impl CodeModelBuilder {
             references,
             data_models,
             module_boundaries,
+            env_dependencies,
         }
     }
 }
@@ -446,6 +460,7 @@ fn extraction_to_contribution(extraction: &FileExtraction) -> FileContribution {
         imports: extraction.imports.clone(),
         references: extraction.references.clone(),
         data_models: extraction.data_models.clone(),
+        env_dependencies: extraction.env_dependencies.clone(),
         file_role: extraction.file_role,
         estimated_tokens: extraction.estimated_tokens,
     }
@@ -493,6 +508,7 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
@@ -508,6 +524,9 @@ mod tests {
                 path: "/health".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/index.ts"), 5),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -530,6 +549,9 @@ mod tests {
                 path: "/api/users".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/routes.ts"), 3),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -540,6 +562,9 @@ mod tests {
                 path: "/api/payments".into(),
                 auth: Some(AuthKind::Middleware("auth".into())),
                 anchor: SourceAnchor::from_line(PathBuf::from("src/payments.ts"), 10),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![Sink {
                 sink_type: SinkType::Log,
@@ -574,6 +599,9 @@ mod tests {
                 path: "/z-route".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/b.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -584,6 +612,9 @@ mod tests {
                 path: "/a-route".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/a.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -610,12 +641,18 @@ mod tests {
                     path: "/a".into(),
                     auth: None,
                     anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+                    parameters: vec![],
+                    handler_name: None,
+                    request_body_type: None,
                 },
                 Interface {
                     method: HttpMethod::Post,
                     path: "/b".into(),
                     auth: None,
                     anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 5),
+                    parameters: vec![],
+                    handler_name: None,
+                    request_body_type: None,
                 },
             ],
             dependencies: vec![Dependency {
@@ -633,6 +670,7 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
@@ -658,6 +696,9 @@ mod tests {
                 path: "/api/a".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/a.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -680,6 +721,9 @@ mod tests {
                 path: "/old".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -693,6 +737,9 @@ mod tests {
                 path: "/new".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -714,6 +761,9 @@ mod tests {
                 path: "/gone".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/gone.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -735,6 +785,9 @@ mod tests {
                 path: "/a".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/a.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -745,6 +798,9 @@ mod tests {
                 path: "/b".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/b.ts"), 5),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![Sink {
                 sink_type: SinkType::Log,
@@ -784,6 +840,7 @@ mod tests {
                     signature: None,
                     visibility: None,
                     parent: None,
+                    is_test: false,
                 },
                 Symbol {
                     name: "getUser".into(),
@@ -793,10 +850,12 @@ mod tests {
                     signature: None,
                     visibility: None,
                     parent: None,
+                    is_test: false,
                 },
             ],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
@@ -837,6 +896,7 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
@@ -868,6 +928,7 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
@@ -898,6 +959,7 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
@@ -916,6 +978,7 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
@@ -944,6 +1007,9 @@ mod tests {
                 path: "/original".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -962,6 +1028,9 @@ mod tests {
                 path: "/should-not-appear".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 5),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -993,6 +1062,9 @@ mod tests {
                 path: "/v1".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -1006,6 +1078,9 @@ mod tests {
                 path: "/v2".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -1032,6 +1107,9 @@ mod tests {
                 path: "/existing".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -1064,6 +1142,9 @@ mod tests {
                     PathBuf::from("/repo/packages/api/src/index.ts"),
                     1,
                 ),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -1077,6 +1158,9 @@ mod tests {
                     PathBuf::from("/repo/packages/auth/src/index.ts"),
                     1,
                 ),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -1113,6 +1197,9 @@ mod tests {
                 path: "/default".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("src/app.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -1136,6 +1223,9 @@ mod tests {
                 path: "/in-pkg".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("/repo/pkg/src/lib.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             vec![],
         );
@@ -1169,6 +1259,9 @@ mod tests {
                 path: "/a".into(),
                 auth: None,
                 anchor: SourceAnchor::from_line(PathBuf::from("/repo/a/src/lib.ts"), 1),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             dependencies: vec![],
             sinks: vec![Sink {
@@ -1181,6 +1274,7 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 100,
             content_hash: None,
@@ -1194,12 +1288,18 @@ mod tests {
                     path: "/b1".into(),
                     auth: None,
                     anchor: SourceAnchor::from_line(PathBuf::from("/repo/b/src/lib.ts"), 1),
+                    parameters: vec![],
+                    handler_name: None,
+                    request_body_type: None,
                 },
                 Interface {
                     method: HttpMethod::Get,
                     path: "/b2".into(),
                     auth: None,
                     anchor: SourceAnchor::from_line(PathBuf::from("/repo/b/src/lib.ts"), 10),
+                    parameters: vec![],
+                    handler_name: None,
+                    request_body_type: None,
                 },
             ],
             dependencies: vec![],
@@ -1208,6 +1308,7 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 200,
             content_hash: None,
@@ -1243,6 +1344,7 @@ mod tests {
             symbols,
             references: refs,
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: role,
             estimated_tokens: 0,
             content_hash: None,
@@ -1266,6 +1368,7 @@ mod tests {
                 signature: None,
                 visibility: None,
                 parent: None,
+                is_test: false,
             }],
         );
 
@@ -1346,6 +1449,7 @@ mod tests {
                 signature: None,
                 visibility: None,
                 parent: None,
+                is_test: false,
             }],
         );
 
@@ -1403,6 +1507,7 @@ mod tests {
                 signature: None,
                 visibility: None,
                 parent: None,
+                is_test: false,
             }],
         );
 

@@ -100,11 +100,16 @@ fn try_extract_route(node: &Node, source: &str, file_path: &Path, extraction: &m
         return;
     }
 
+    let handler_name = extract_to_action(node, source);
+
     extraction.interfaces.push(Interface {
         method: http_method,
-        path: route_path,
+        path: route_path.clone(),
         auth: None, // Rails auth is at controller level, not route level
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&route_path),
+        handler_name,
+        request_body_type: None,
     });
 }
 
@@ -126,9 +131,12 @@ fn try_extract_resources_route(
 
     extraction.interfaces.push(Interface {
         method: HttpMethod::All,
-        path,
+        path: path.clone(),
         auth: None,
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&path),
+        handler_name: None,
+        request_body_type: None,
     });
 }
 
@@ -283,6 +291,56 @@ fn find_first_symbol_in_node(node: &Node, source: &str) -> Option<String> {
             if child.kind() == "simple_symbol" || child.kind() == "symbol" {
                 let text = node_text(&child, source);
                 return Some(text.trim_start_matches(':').to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract the action name from a Rails `to: 'controller#action'` keyword argument.
+///
+/// Walks the call node's children looking for a `pair` node where the key is
+/// `to` (a hash key or a simple symbol `:to`) and the value is a string like
+/// `'users#index'`. Returns the action part (after `#`) if found.
+fn extract_to_action(node: &Node, source: &str) -> Option<String> {
+    for i in 0..node.child_count() {
+        let child = node.child(i as u32)?;
+        if let Some(action) = find_to_pair_in_subtree(&child, source) {
+            return Some(action);
+        }
+    }
+    None
+}
+
+/// Recursively search for a `pair` node with key `to` and a string value
+/// containing `#`, returning the action portion.
+fn find_to_pair_in_subtree(node: &Node, source: &str) -> Option<String> {
+    if node.kind() == "pair" {
+        // Check if the key is `to:` or `:to`
+        if let Some(key_node) = node.child_by_field_name("key") {
+            let key_text = node_text_ref(&key_node, source);
+            let key_name = key_text.trim_start_matches(':').trim_end_matches(':');
+            if key_name == "to" {
+                if let Some(val_node) = node.child_by_field_name("value") {
+                    let val_text = node_text(&val_node, source);
+                    let val_str = common::strip_quotes(&val_text);
+                    // Extract the action part after '#'
+                    if let Some(hash_pos) = val_str.find('#') {
+                        let action = &val_str[hash_pos + 1..];
+                        if !action.is_empty() {
+                            return Some(action.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Recurse into children
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            if let Some(action) = find_to_pair_in_subtree(&child, source) {
+                return Some(action);
             }
         }
     }

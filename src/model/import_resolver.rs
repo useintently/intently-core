@@ -425,6 +425,7 @@ mod tests {
             signature: None,
             visibility: None,
             parent: None,
+            is_test: false,
         }
     }
 

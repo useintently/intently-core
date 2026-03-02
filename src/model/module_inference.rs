@@ -185,6 +185,7 @@ mod tests {
             signature: None,
             visibility: Some(Visibility::Public),
             parent: None,
+            is_test: false,
         }
     }
 
@@ -198,6 +199,7 @@ mod tests {
             signature: None,
             visibility: Some(Visibility::Private),
             parent: None,
+            is_test: false,
         }
     }
 

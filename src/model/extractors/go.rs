@@ -141,11 +141,20 @@ fn try_extract_gin_route(
         None
     };
 
+    // Extract handler name from the last argument (e.g., `listUsers` in `r.GET("/users", listUsers)`)
+    let handler_name = arg_texts
+        .last()
+        .map(|t| common::strip_quotes_ref(t).to_string())
+        .filter(|name| !name.is_empty() && !name.starts_with("func("));
+
     extraction.interfaces.push(Interface {
         method: http_method,
-        path: route_path,
+        path: route_path.clone(),
         auth,
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&route_path),
+        handler_name,
+        request_body_type: None,
     });
 }
 
@@ -165,11 +174,20 @@ fn try_extract_net_http_route(
     if let Some(first_arg) = args.named_child(0) {
         let text = node_text(&first_arg, source);
         if let Some(path) = extract_string_value(&text) {
+            // Second argument is the handler function
+            let handler_name = args
+                .named_child(1)
+                .map(|h| node_text_ref(&h, source).to_string())
+                .filter(|name| !name.is_empty() && !name.starts_with("func("));
+
             extraction.interfaces.push(Interface {
                 method: HttpMethod::All,
-                path,
+                path: path.clone(),
                 auth: None,
                 anchor: anchor_from_node(node, file_path),
+                parameters: common::extract_path_params(&path),
+                handler_name,
+                request_body_type: None,
             });
         }
     }

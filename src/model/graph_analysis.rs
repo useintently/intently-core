@@ -598,12 +598,18 @@ mod tests {
                         path: "/api/users".into(),
                         auth: None,
                         anchor: SourceAnchor::from_line(PathBuf::from("src/routes.ts"), 5),
+                        parameters: vec![],
+                        handler_name: None,
+                        request_body_type: None,
                     },
                     Interface {
                         method: HttpMethod::Post,
                         path: "/api/orders".into(),
                         auth: None,
                         anchor: SourceAnchor::from_line(PathBuf::from("src/routes.ts"), 15),
+                        parameters: vec![],
+                        handler_name: None,
+                        request_body_type: None,
                     },
                 ],
                 dependencies: vec![],
@@ -621,6 +627,7 @@ mod tests {
                         signature: None,
                         visibility: Some(Visibility::Public),
                         parent: None,
+                        is_test: false,
                     },
                     Symbol {
                         name: "UserService".into(),
@@ -634,6 +641,7 @@ mod tests {
                         signature: None,
                         visibility: Some(Visibility::Public),
                         parent: None,
+                        is_test: false,
                     },
                     Symbol {
                         name: "findAll".into(),
@@ -647,6 +655,7 @@ mod tests {
                         signature: None,
                         visibility: Some(Visibility::Public),
                         parent: Some("UserService".into()),
+                        is_test: false,
                     },
                     Symbol {
                         name: "validate".into(),
@@ -656,6 +665,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                 ],
                 imports: vec![],
@@ -701,6 +711,7 @@ mod tests {
                 ],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 4,
@@ -738,6 +749,7 @@ mod tests {
                 references: vec![],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 0,
@@ -840,6 +852,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                     Symbol {
                         name: "B".into(),
@@ -849,6 +862,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                     Symbol {
                         name: "C".into(),
@@ -858,6 +872,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                 ],
                 imports: vec![],
@@ -889,6 +904,7 @@ mod tests {
                 ],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 3,
@@ -1037,6 +1053,9 @@ mod tests {
                     path: "/cycle".into(),
                     auth: None,
                     anchor: SourceAnchor::from_line(PathBuf::from("routes.ts"), 1),
+                    parameters: vec![],
+                    handler_name: None,
+                    request_body_type: None,
                 }],
                 dependencies: vec![],
                 sinks: vec![],
@@ -1049,6 +1068,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                     Symbol {
                         name: "B".into(),
@@ -1058,6 +1078,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                 ],
                 imports: vec![],
@@ -1089,6 +1110,7 @@ mod tests {
                 ],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 3,

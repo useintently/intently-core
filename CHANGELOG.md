@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `is_test: bool` field on `Symbol` — marks test functions/methods across 9 languages via `LanguageBehavior::is_test_symbol()`: naming conventions (Python `test_*`, Go `Test*`, Ruby `test_*`, PHP `test*`, TS/JS `test*`), annotations (Java `@Test`), attributes (Rust `#[test]`, C# `[Fact]`/`[Test]`/`[Theory]`) — BDD `describe`/`it` blocks are NOT detected (they're call_expressions, not function_declarations)
+- `total_test_symbols: usize` field on `CodeModelStats` — aggregated count of `is_test` symbols across all components
+- 14 new is_test detection unit tests (positive + negative for all 9 language families, from 460 to 474 unit tests)
+- `EnvDependency` struct for environment variable references — captures `var_name` + `SourceAnchor` per access site
+- `env_detection.rs` extractor module detecting env var patterns across 8 languages: `process.env.X` (TS/JS), `os.getenv()` / `os.environ[]` (Python), `os.Getenv()` (Go), `System.getenv()` (Java), `Environment.GetEnvironmentVariable()` (C#), `getenv()` / `env()` / `$_ENV[]` (PHP), `ENV[]` / `ENV.fetch()` (Ruby), `std::env::var()` / `env!()` (Rust) — dynamic access emits `var_name: "<dynamic>"`
+- `env_dependencies: Vec<EnvDependency>` on `FileExtraction` and `Component` — flows through extraction pipeline and builder aggregation
+- `total_env_dependencies: usize` on `CodeModelStats` — aggregated count across all components
+- `EnvDependency` re-exported from public API
+- 17 new env detection unit tests (per-language positive tests + edge cases, from 474 to 491 unit tests)
+- `ParameterLocation` enum (`Path`, `Query`, `Header`, `Body`) and `RouteParameter` struct — typed route parameter representation with optional type annotation
+- `parameters: Vec<RouteParameter>`, `handler_name: Option<String>`, `request_body_type: Option<String>` on `Interface` — enriches route definitions with path params, handler function names, and request body types (all optional, backward compatible via serde defaults)
+- `extract_path_params(route_path)` shared utility in `common.rs` — parses `:param` (Express/Gin/Rails), `{param}` (FastAPI/Spring/ASP.NET/Laravel), and `<param>` (Flask) path parameter styles
+- Path parameter extraction wired into all 7 language extractors (TypeScript, Python, Go, Java, C#, PHP, Ruby) — every extracted Interface now includes parsed route parameters
+- Handler name extraction for Express (last call arg), NestJS (method name), FastAPI/Flask (decorated function name), Go Gin/Echo (last call arg), Spring Boot (method name), ASP.NET (method name), Rails (action from `to:` arg)
+- `ParameterLocation`, `RouteParameter` re-exported from public API
+- 8 new `extract_path_params` unit tests (colon, curly, Flask angle bracket, constraints, dedup, mixed styles)
 - 3 new monorepo test fixtures: `npm_monorepo/` (npm workspace, 2 TS/Express packages), `go_workspace/` (Go workspace, 2 Gin modules), `uv_workspace/` (uv workspace, 2 FastAPI packages) — exercises all 5 workspace detection paths end-to-end
 - `analyze_fixtures` example binary (`cargo run --example analyze_fixtures`) — runs IntentlyEngine on all fixtures, outputs per-fixture JSON + summary table to stderr, supports single-fixture filter and `--summary` mode
 - 9 new integration tests: 3 per new monorepo fixture (component detection, workspace kind, route/symbol extraction) — from 534 to 543 total tests

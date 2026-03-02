@@ -227,11 +227,19 @@ fn try_extract_attributed_route(
             method_auth.or_else(|| class_auth.clone())
         };
 
+        // Extract method name from the method_declaration node
+        let handler_name = node
+            .child_by_field_name("name")
+            .map(|n| node_text(&n, source));
+
         extraction.interfaces.push(Interface {
             method,
-            path,
+            path: path.clone(),
             auth,
             anchor,
+            parameters: common::extract_path_params(&path),
+            handler_name,
+            request_body_type: None,
         });
     }
 }
@@ -421,9 +429,12 @@ fn try_extract_minimal_api_route(
 
     extraction.interfaces.push(Interface {
         method: http_method,
-        path,
+        path: path.clone(),
         auth,
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&path),
+        handler_name: None,
+        request_body_type: None,
     });
 }
 

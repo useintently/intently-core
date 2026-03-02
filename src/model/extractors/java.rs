@@ -107,11 +107,19 @@ fn try_extract_annotated_route(
     }
 
     if let Some((method, path, anchor)) = route_info {
+        // Extract method name from the method_declaration node
+        let handler_name = node
+            .child_by_field_name("name")
+            .map(|n| node_text(&n, source));
+
         extraction.interfaces.push(Interface {
             method,
-            path,
+            path: path.clone(),
             auth,
             anchor,
+            parameters: common::extract_path_params(&path),
+            handler_name,
+            request_body_type: None,
         });
     }
 }
@@ -168,11 +176,19 @@ fn try_extract_annotated_route_kotlin(
     }
 
     if let Some((method, path, anchor)) = route_info {
+        // Extract function name from the function_declaration node
+        let handler_name = node
+            .child_by_field_name("name")
+            .map(|n| node_text(&n, source));
+
         extraction.interfaces.push(Interface {
             method,
-            path,
+            path: path.clone(),
             auth,
             anchor,
+            parameters: common::extract_path_params(&path),
+            handler_name,
+            request_body_type: None,
         });
     }
 }

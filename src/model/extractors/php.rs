@@ -120,9 +120,12 @@ fn try_extract_laravel_route(
         let auth = detect_middleware_chain(node, source);
         extraction.interfaces.push(Interface {
             method: HttpMethod::All,
-            path: route_path,
+            path: route_path.clone(),
             auth,
             anchor: anchor_from_node(node, file_path),
+            parameters: common::extract_path_params(&route_path),
+            handler_name: None,
+            request_body_type: None,
         });
         return;
     }
@@ -148,9 +151,12 @@ fn try_extract_laravel_route(
 
     extraction.interfaces.push(Interface {
         method: http_method,
-        path: route_path,
+        path: route_path.clone(),
         auth,
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&route_path),
+        handler_name: None,
+        request_body_type: None,
     });
 }
 
@@ -208,9 +214,12 @@ fn expand_resource_routes(
 
         extraction.interfaces.push(Interface {
             method,
-            path,
+            path: path.clone(),
             auth: auth.clone(),
             anchor: anchor.clone(),
+            parameters: common::extract_path_params(&path),
+            handler_name: None,
+            request_body_type: None,
         });
     }
 }

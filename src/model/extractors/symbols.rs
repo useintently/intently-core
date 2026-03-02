@@ -181,6 +181,7 @@ pub fn extract_symbols(
             let visibility = behavior.parse_visibility(&node, source);
             let parent = behavior.find_parent_name(&node, source);
             let doc = behavior.extract_doc_comment(&node, source);
+            let is_test = behavior.is_test_symbol(&node, source, &name);
 
             symbols.push(Symbol {
                 name,
@@ -190,6 +191,7 @@ pub fn extract_symbols(
                 signature,
                 visibility,
                 parent,
+                is_test,
             });
         }
     }
@@ -1121,5 +1123,180 @@ public class ItemsController {
         );
         let method = symbols.iter().find(|s| s.name == "Delete").unwrap();
         assert_eq!(method.parent.as_deref(), Some("ItemsController"));
+    }
+
+    // =======================================================================
+    // is_test detection
+    // =======================================================================
+
+    #[test]
+    fn python_test_function_detected() {
+        let symbols = symbols_for(
+            "def test_create_user():\n    pass\n",
+            SupportedLanguage::Python,
+            "test_users.py",
+        );
+        let sym = symbols.iter().find(|s| s.name == "test_create_user").unwrap();
+        assert!(sym.is_test, "def test_* should be detected as test");
+    }
+
+    #[test]
+    fn python_regular_function_not_test() {
+        let symbols = symbols_for(
+            "def create_user():\n    pass\n",
+            SupportedLanguage::Python,
+            "users.py",
+        );
+        let sym = symbols.iter().find(|s| s.name == "create_user").unwrap();
+        assert!(!sym.is_test, "regular function should not be test");
+    }
+
+    #[test]
+    fn go_test_function_detected() {
+        let symbols = symbols_for(
+            "package main\n\nimport \"testing\"\n\nfunc TestCreateUser(t *testing.T) {\n}\n",
+            SupportedLanguage::Go,
+            "user_test.go",
+        );
+        let sym = symbols.iter().find(|s| s.name == "TestCreateUser").unwrap();
+        assert!(sym.is_test, "func Test*(t *testing.T) should be detected as test");
+    }
+
+    #[test]
+    fn go_regular_function_not_test() {
+        let symbols = symbols_for(
+            "package main\n\nfunc CreateUser() {\n}\n",
+            SupportedLanguage::Go,
+            "user.go",
+        );
+        let sym = symbols.iter().find(|s| s.name == "CreateUser").unwrap();
+        assert!(!sym.is_test, "regular Go func should not be test");
+    }
+
+    #[test]
+    fn java_test_annotation_detected() {
+        let symbols = symbols_for(
+            r#"
+public class UserTest {
+    @Test
+    void shouldCreateUser() {
+    }
+}
+"#,
+            SupportedLanguage::Java,
+            "UserTest.java",
+        );
+        let sym = symbols.iter().find(|s| s.name == "shouldCreateUser").unwrap();
+        assert!(sym.is_test, "@Test annotation should mark method as test");
+    }
+
+    #[test]
+    fn java_regular_method_not_test() {
+        let symbols = symbols_for(
+            r#"
+public class UserService {
+    public void createUser() {
+    }
+}
+"#,
+            SupportedLanguage::Java,
+            "UserService.java",
+        );
+        let sym = symbols.iter().find(|s| s.name == "createUser").unwrap();
+        assert!(!sym.is_test, "regular Java method should not be test");
+    }
+
+    #[test]
+    fn rust_test_attribute_detected() {
+        let symbols = symbols_for(
+            "#[test]\nfn test_it_works() {\n    assert!(true);\n}\n",
+            SupportedLanguage::Rust,
+            "lib.rs",
+        );
+        let sym = symbols.iter().find(|s| s.name == "test_it_works").unwrap();
+        assert!(sym.is_test, "#[test] attribute should mark function as test");
+    }
+
+    #[test]
+    fn rust_regular_function_not_test() {
+        let symbols = symbols_for(
+            "fn helper() -> bool {\n    true\n}\n",
+            SupportedLanguage::Rust,
+            "lib.rs",
+        );
+        let sym = symbols.iter().find(|s| s.name == "helper").unwrap();
+        assert!(!sym.is_test, "regular Rust fn should not be test");
+    }
+
+    #[test]
+    fn csharp_fact_attribute_detected() {
+        let symbols = symbols_for(
+            r#"
+public class UserTests {
+    [Fact]
+    public void ShouldCreateUser() {
+    }
+}
+"#,
+            SupportedLanguage::CSharp,
+            "UserTests.cs",
+        );
+        let sym = symbols.iter().find(|s| s.name == "ShouldCreateUser").unwrap();
+        assert!(sym.is_test, "[Fact] attribute should mark method as test");
+    }
+
+    #[test]
+    fn ruby_test_method_detected() {
+        let symbols = symbols_for(
+            "class UserTest\n  def test_create\n    # assert\n  end\nend\n",
+            SupportedLanguage::Ruby,
+            "user_test.rb",
+        );
+        let sym = symbols.iter().find(|s| s.name == "test_create").unwrap();
+        assert!(sym.is_test, "def test_* should be detected as test in Ruby");
+    }
+
+    #[test]
+    fn ruby_regular_method_not_test() {
+        let symbols = symbols_for(
+            "class User\n  def create\n  end\nend\n",
+            SupportedLanguage::Ruby,
+            "user.rb",
+        );
+        let sym = symbols.iter().find(|s| s.name == "create").unwrap();
+        assert!(!sym.is_test, "regular Ruby method should not be test");
+    }
+
+    #[test]
+    fn php_test_method_detected() {
+        let symbols = symbols_for(
+            "<?php\nclass UserTest {\n    public function testCreate() {}\n}\n?>",
+            SupportedLanguage::Php,
+            "UserTest.php",
+        );
+        let sym = symbols.iter().find(|s| s.name == "testCreate").unwrap();
+        assert!(sym.is_test, "function test* should be detected as test in PHP");
+    }
+
+    #[test]
+    fn ts_test_function_detected() {
+        let symbols = symbols_for(
+            "function testCreateUser() {\n    expect(true).toBe(true);\n}\n",
+            SupportedLanguage::TypeScript,
+            "user.test.ts",
+        );
+        let sym = symbols.iter().find(|s| s.name == "testCreateUser").unwrap();
+        assert!(sym.is_test, "function test* should be detected as test in TS");
+    }
+
+    #[test]
+    fn ts_regular_function_not_test() {
+        let symbols = symbols_for(
+            "function createUser() {\n    return {};\n}\n",
+            SupportedLanguage::TypeScript,
+            "user.ts",
+        );
+        let sym = symbols.iter().find(|s| s.name == "createUser").unwrap();
+        assert!(!sym.is_test, "regular TS function should not be test");
     }
 }

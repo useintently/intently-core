@@ -452,6 +452,34 @@ pub struct Component {
     pub references: Vec<Reference>,
     pub data_models: Vec<DataModel>,
     pub module_boundaries: Vec<ModuleBoundary>,
+    /// Environment variable references aggregated from all files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_dependencies: Vec<EnvDependency>,
+}
+
+/// Location of a route parameter within the HTTP request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParameterLocation {
+    /// URL path segment (e.g., `/users/:id`).
+    Path,
+    /// URL query string (e.g., `?page=1`).
+    Query,
+    /// HTTP header.
+    Header,
+    /// Request body field.
+    Body,
+}
+
+/// A parameter associated with a route.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RouteParameter {
+    pub name: String,
+    pub location: ParameterLocation,
+    /// Type annotation, if available (e.g., `"string"`, `"int"`).
+    /// `None` for untyped frameworks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub param_type: Option<String>,
 }
 
 /// An HTTP endpoint exposed by a component.
@@ -463,6 +491,15 @@ pub struct Interface {
     /// Source location of the route definition in the CST.
     #[serde(flatten)]
     pub anchor: SourceAnchor,
+    /// Route parameters extracted from the path pattern and framework decorators.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<RouteParameter>,
+    /// Name of the handler function/method for this route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handler_name: Option<String>,
+    /// Type name of the request body (e.g., `"CreateUserDto"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_body_type: Option<String>,
 }
 
 /// HTTP methods supported by the extractor.
@@ -531,6 +568,18 @@ pub enum DependencyType {
     HttpCall,
 }
 
+/// An environment variable reference detected in source code.
+///
+/// Captures the variable name and source location. Dynamic access
+/// (e.g., `process.env[varName]`) is represented as `var_name: "<dynamic>"`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnvDependency {
+    pub var_name: String,
+    /// Source location of the env access in the CST.
+    #[serde(flatten)]
+    pub anchor: SourceAnchor,
+}
+
 /// A logging or output sink detected in the source code.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Sink {
@@ -576,6 +625,16 @@ pub struct Symbol {
     pub visibility: Option<Visibility>,
     /// Enclosing class, module, trait, or impl block name.
     pub parent: Option<String>,
+    /// Whether this symbol is a test function/method.
+    ///
+    /// Detected via language-specific patterns: naming conventions (`test_*` in
+    /// Python, `Test*` in Go), annotations (`@Test` in Java), or attributes
+    /// (`#[test]` in Rust, `[Fact]` in C#).
+    ///
+    /// **Limitation:** BDD-style `describe`/`it` blocks are call expressions,
+    /// not function declarations — they are NOT marked as test symbols.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_test: bool,
 }
 
 /// Kind of code symbol.
@@ -751,6 +810,12 @@ pub struct CodeModelStats {
     /// Total number of directories in the file tree.
     #[serde(default)]
     pub total_directories: usize,
+    /// Number of symbols identified as test functions/methods.
+    #[serde(default)]
+    pub total_test_symbols: usize,
+    /// Total number of environment variable references across all files.
+    #[serde(default)]
+    pub total_env_dependencies: usize,
 }
 
 /// Extraction results from a single source file, prior to aggregation.
@@ -765,6 +830,9 @@ pub struct FileExtraction {
     pub symbols: Vec<Symbol>,
     pub references: Vec<Reference>,
     pub data_models: Vec<DataModel>,
+    /// Environment variable references found in this file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_dependencies: Vec<EnvDependency>,
     /// Classification of this file's role in the project.
     #[serde(default = "default_file_role")]
     pub file_role: FileRole,
@@ -779,6 +847,11 @@ pub struct FileExtraction {
 
 fn default_file_role() -> FileRole {
     FileRole::Implementation
+}
+
+/// Serde helper for `#[serde(skip_serializing_if = "is_false")]`.
+fn is_false(b: &bool) -> bool {
+    !(*b)
 }
 
 /// An import/require statement found in a source file.
@@ -806,6 +879,9 @@ mod tests {
                     path: "/api/health".into(),
                     auth: None,
                     anchor: SourceAnchor::from_line(PathBuf::from("src/index.ts"), 10),
+                    parameters: vec![],
+                    handler_name: None,
+                    request_body_type: None,
                 }],
                 dependencies: vec![],
                 sinks: vec![],
@@ -814,6 +890,7 @@ mod tests {
                 references: vec![],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 1,
@@ -830,6 +907,8 @@ mod tests {
                 file_roles: HashMap::new(),
                 total_estimated_tokens: 0,
                 total_directories: 0,
+                total_test_symbols: 0,
+                total_env_dependencies: 0,
             },
             file_tree: None,
         };
@@ -849,6 +928,9 @@ mod tests {
                 path: "/api/users".into(),
                 auth: Some(AuthKind::Middleware("authMiddleware".into())),
                 anchor: SourceAnchor::from_line(PathBuf::from("src/server.ts"), 15),
+                parameters: vec![],
+                handler_name: None,
+                request_body_type: None,
             }],
             dependencies: vec![Dependency {
                 target: "fetch(\"https://api.example.com\")".into(),
@@ -869,6 +951,7 @@ mod tests {
             symbols: vec![],
             references: vec![],
             data_models: vec![],
+            env_dependencies: vec![],
             file_role: FileRole::Implementation,
             estimated_tokens: 250,
             content_hash: None,
@@ -886,6 +969,9 @@ mod tests {
             path: "/api/users/:id".into(),
             auth: Some(AuthKind::Middleware("jwtAuth".into())),
             anchor: SourceAnchor::from_line(PathBuf::from("routes.ts"), 42),
+            parameters: vec![],
+            handler_name: None,
+            request_body_type: None,
         };
 
         let json = serde_json::to_string(&iface).unwrap();
@@ -910,6 +996,9 @@ mod tests {
             path: "/api/users".into(),
             auth: Some(AuthKind::Decorator("login_required".into())),
             anchor: SourceAnchor::from_line(PathBuf::from("views.py"), 10),
+            parameters: vec![],
+            handler_name: None,
+            request_body_type: None,
         };
 
         let json = serde_json::to_string(&iface).unwrap();
@@ -925,6 +1014,9 @@ mod tests {
             path: "/api/orders".into(),
             auth: Some(AuthKind::Annotation("PreAuthorize".into())),
             anchor: SourceAnchor::from_line(PathBuf::from("OrderController.java"), 25),
+            parameters: vec![],
+            handler_name: None,
+            request_body_type: None,
         };
 
         let json = serde_json::to_string(&iface).unwrap();
@@ -940,6 +1032,9 @@ mod tests {
             path: "/api/items/{id}".into(),
             auth: Some(AuthKind::Attribute("Authorize".into())),
             anchor: SourceAnchor::from_line(PathBuf::from("ItemsController.cs"), 30),
+            parameters: vec![],
+            handler_name: None,
+            request_body_type: None,
         };
 
         let json = serde_json::to_string(&iface).unwrap();
@@ -958,6 +1053,7 @@ mod tests {
             signature: Some("pub fn process_payment(&self, amount: f64) -> Result<Receipt>".into()),
             visibility: Some(Visibility::Public),
             parent: Some("PaymentService".into()),
+            is_test: false,
         };
 
         let json = serde_json::to_string(&symbol).unwrap();
@@ -979,6 +1075,7 @@ mod tests {
             signature: None,
             visibility: None,
             parent: None,
+            is_test: false,
         };
 
         let json = serde_json::to_string(&symbol).unwrap();
@@ -1352,6 +1449,7 @@ mod tests {
                 references: refs,
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 total_references: total,

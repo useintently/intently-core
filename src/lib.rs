@@ -18,5 +18,8 @@ pub use model::graph_analysis::{
     AnalysisContext, AnalysisPipeline, DegreeCentrality, EntryPoint, EntryPointReason, FlowStep,
     GraphAnalyzer, ProcessFlow,
 };
-pub use model::types::{estimate_tokens, FileExtraction, FileRole, ResolutionMethod, TokenBudget};
+pub use model::types::{
+    estimate_tokens, EnvDependency, FileExtraction, FileRole, ParameterLocation, ResolutionMethod,
+    RouteParameter, TokenBudget,
+};
 pub use workspace::{WorkspaceKind, WorkspaceLayout, WorkspacePackage};

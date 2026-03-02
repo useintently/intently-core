@@ -1029,6 +1029,9 @@ mod tests {
                     path: "/api/users".into(),
                     auth: None,
                     anchor: SourceAnchor::from_line(PathBuf::from("src/routes.ts"), 10),
+                    parameters: vec![],
+                    handler_name: None,
+                    request_body_type: None,
                 }],
                 dependencies: vec![],
                 sinks: vec![],
@@ -1045,6 +1048,7 @@ mod tests {
                         signature: None,
                         visibility: Some(Visibility::Public),
                         parent: None,
+                        is_test: false,
                     },
                     Symbol {
                         name: "getUser".into(),
@@ -1058,6 +1062,7 @@ mod tests {
                         signature: None,
                         visibility: Some(Visibility::Public),
                         parent: Some("UserService".into()),
+                        is_test: false,
                     },
                     Symbol {
                         name: "validate".into(),
@@ -1067,6 +1072,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                 ],
                 imports: vec![],
@@ -1166,6 +1172,7 @@ mod tests {
                         depends_on: vec![],
                     },
                 ],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 4,
@@ -1203,6 +1210,7 @@ mod tests {
                 references: vec![],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 0,
@@ -1529,6 +1537,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                     Symbol {
                         name: "funcB".into(),
@@ -1538,6 +1547,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                 ],
                 imports: vec![],
@@ -1569,6 +1579,7 @@ mod tests {
                 ],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 2,
@@ -1621,6 +1632,7 @@ mod tests {
                         depends_on: vec!["auth".into()],
                     },
                 ],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 0,
@@ -1715,6 +1727,7 @@ mod tests {
                     signature: None,
                     visibility: None,
                     parent: None,
+                    is_test: false,
                 }],
                 imports: vec![],
                 references: vec![Reference {
@@ -1731,6 +1744,7 @@ mod tests {
                 }],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 1,
@@ -1822,6 +1836,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                     Symbol {
                         name: "funcB".into(),
@@ -1831,6 +1846,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                     Symbol {
                         name: "funcC".into(),
@@ -1840,6 +1856,7 @@ mod tests {
                         signature: None,
                         visibility: None,
                         parent: None,
+                        is_test: false,
                     },
                 ],
                 imports: vec![],
@@ -1871,6 +1888,7 @@ mod tests {
                 ],
                 data_models: vec![],
                 module_boundaries: vec![],
+                env_dependencies: vec![],
             }],
             stats: CodeModelStats {
                 files_analyzed: 3,
