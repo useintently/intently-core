@@ -2724,3 +2724,55 @@ fn test_references_field_populated_in_full_analysis() {
         "all references should have is_test_reference field"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Git metadata tests (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Verify that git metadata is computed when running on intently-core's own repo.
+///
+/// This test uses `#[ignore]` + `#[cfg(feature = "git")]` because:
+/// - It runs against the real intently-core git history
+/// - It requires the `git` feature flag to be enabled
+/// - CI should run this explicitly with `cargo test --features git -- --ignored`
+#[test]
+#[ignore]
+#[cfg(feature = "git")]
+fn git_metadata_populated_on_own_repo() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut engine = IntentlyEngine::new(manifest_dir);
+    let result = engine
+        .full_analysis()
+        .expect("full analysis should succeed");
+
+    // Verify git_stats was computed
+    assert!(
+        result.model.stats.git_stats.is_some(),
+        "git_stats should be populated when analyzing a git repo with feature=git"
+    );
+
+    let git_stats = result.model.stats.git_stats.as_ref().unwrap();
+    assert!(
+        git_stats.total_authors > 0,
+        "should find at least one author"
+    );
+    assert!(
+        git_stats.total_commits > 0,
+        "should count at least one commit"
+    );
+    assert!(
+        !git_stats.hottest_files.is_empty(),
+        "should identify hottest files"
+    );
+
+    // Verify per-file git metadata is populated on at least some extractions
+    let extractions_with_git: usize = engine
+        .extractions()
+        .values()
+        .filter(|e| e.git_metadata.is_some())
+        .count();
+    assert!(
+        extractions_with_git > 0,
+        "at least some files should have git metadata"
+    );
+}

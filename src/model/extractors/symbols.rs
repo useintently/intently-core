@@ -1136,7 +1136,10 @@ public class ItemsController {
             SupportedLanguage::Python,
             "test_users.py",
         );
-        let sym = symbols.iter().find(|s| s.name == "test_create_user").unwrap();
+        let sym = symbols
+            .iter()
+            .find(|s| s.name == "test_create_user")
+            .unwrap();
         assert!(sym.is_test, "def test_* should be detected as test");
     }
 
@@ -1159,7 +1162,10 @@ public class ItemsController {
             "user_test.go",
         );
         let sym = symbols.iter().find(|s| s.name == "TestCreateUser").unwrap();
-        assert!(sym.is_test, "func Test*(t *testing.T) should be detected as test");
+        assert!(
+            sym.is_test,
+            "func Test*(t *testing.T) should be detected as test"
+        );
     }
 
     #[test]
@@ -1186,7 +1192,10 @@ public class UserTest {
             SupportedLanguage::Java,
             "UserTest.java",
         );
-        let sym = symbols.iter().find(|s| s.name == "shouldCreateUser").unwrap();
+        let sym = symbols
+            .iter()
+            .find(|s| s.name == "shouldCreateUser")
+            .unwrap();
         assert!(sym.is_test, "@Test annotation should mark method as test");
     }
 
@@ -1214,7 +1223,10 @@ public class UserService {
             "lib.rs",
         );
         let sym = symbols.iter().find(|s| s.name == "test_it_works").unwrap();
-        assert!(sym.is_test, "#[test] attribute should mark function as test");
+        assert!(
+            sym.is_test,
+            "#[test] attribute should mark function as test"
+        );
     }
 
     #[test]
@@ -1241,7 +1253,10 @@ public class UserTests {
             SupportedLanguage::CSharp,
             "UserTests.cs",
         );
-        let sym = symbols.iter().find(|s| s.name == "ShouldCreateUser").unwrap();
+        let sym = symbols
+            .iter()
+            .find(|s| s.name == "ShouldCreateUser")
+            .unwrap();
         assert!(sym.is_test, "[Fact] attribute should mark method as test");
     }
 
@@ -1275,7 +1290,10 @@ public class UserTests {
             "UserTest.php",
         );
         let sym = symbols.iter().find(|s| s.name == "testCreate").unwrap();
-        assert!(sym.is_test, "function test* should be detected as test in PHP");
+        assert!(
+            sym.is_test,
+            "function test* should be detected as test in PHP"
+        );
     }
 
     #[test]
@@ -1286,7 +1304,10 @@ public class UserTests {
             "user.test.ts",
         );
         let sym = symbols.iter().find(|s| s.name == "testCreateUser").unwrap();
-        assert!(sym.is_test, "function test* should be detected as test in TS");
+        assert!(
+            sym.is_test,
+            "function test* should be detected as test in TS"
+        );
     }
 
     #[test]

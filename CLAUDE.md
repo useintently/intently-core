@@ -58,6 +58,9 @@ intently-core/
 │   │       ├── call_graph.rs   # Call site detection per language (via LanguageBehavior)
 │   │       ├── type_hierarchy.rs # extends/implements detection
 │   │       └── data_models.rs  # Struct/class/interface field extraction
+│   ├── git/                # Git metadata extraction (optional, feature-gated)
+│   │   ├── mod.rs          # Module gate: #[cfg(feature = "git")]
+│   │   └── metadata.rs     # compute_git_metadata(), compute_git_stats()
 │   ├── search/             # ast-grep structural code search
 │   │   ├── mod.rs
 │   │   └── pattern_engine.rs

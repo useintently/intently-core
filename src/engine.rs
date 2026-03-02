@@ -100,6 +100,11 @@ pub struct IntentlyEngine {
     /// When present, files are routed to per-package components during
     /// extraction, enabling per-package import resolution and module inference.
     workspace_layout: Option<WorkspaceLayout>,
+    /// Cached git metadata from the most recent full_analysis.
+    /// Used to compute GitStats and merge into the CodeModel.
+    #[cfg(feature = "git")]
+    git_metadata_cache:
+        Option<std::collections::HashMap<PathBuf, crate::model::types::GitFileMetadata>>,
 }
 
 impl IntentlyEngine {
@@ -134,6 +139,8 @@ impl IntentlyEngine {
             model_builder,
             knowledge_graph: None,
             workspace_layout,
+            #[cfg(feature = "git")]
+            git_metadata_cache: None,
         }
     }
 
@@ -205,6 +212,30 @@ impl IntentlyEngine {
 
         drop(_parse_span);
         let parse_extract_ms = parse_start.elapsed().as_millis() as u64;
+
+        // Merge git metadata into file extractions (when feature is enabled)
+        #[cfg(feature = "git")]
+        {
+            let _git_span = info_span!("git_metadata").entered();
+            if let Some(git_metadata) =
+                crate::git::metadata::compute_git_metadata(&self.project_root)
+            {
+                info!(
+                    files_with_metadata = git_metadata.len(),
+                    "computed git metadata"
+                );
+                for (path, extraction) in &mut self.extraction_cache {
+                    if let Some(meta) = git_metadata.get(path) {
+                        extraction.git_metadata = Some(meta.clone());
+                    }
+                }
+                // Re-route extractions that got git metadata into the model builder
+                // (builder already has the extractions, but git_metadata is on FileExtraction
+                // which the builder doesn't track — it's passed through to the output model
+                // via the extraction_cache, so no re-routing needed)
+                self.git_metadata_cache = Some(git_metadata);
+            }
+        }
 
         self.build_result(start, parse_extract_ms)
     }
@@ -476,11 +507,18 @@ impl IntentlyEngine {
     /// Build the extraction result from current caches.
     fn build_result(&mut self, start: Instant, parse_extract_ms: u64) -> Result<ExtractionResult> {
         let model_start = Instant::now();
-        let model = {
+        #[allow(unused_mut)]
+        let mut model = {
             let _span = info_span!("build_model", files = self.extraction_cache.len(),).entered();
             self.model_builder.build()
         };
         let model_build_ms = model_start.elapsed().as_millis() as u64;
+
+        // Compute and attach git stats when metadata is available
+        #[cfg(feature = "git")]
+        if let Some(ref git_metadata) = self.git_metadata_cache {
+            model.stats.git_stats = Some(crate::git::metadata::compute_git_stats(git_metadata));
+        }
 
         // Build knowledge graph from code model (derived view for traversal)
         let (graph_stats, graph) = {

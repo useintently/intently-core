@@ -228,26 +228,22 @@ fn try_extract_django_path(
 
     // Extract handler name from the second positional argument.
     // Django patterns: path('url/', views.handler_name) or path('url/', handler_name)
-    let handler_name = args
-        .named_child(1)
-        .and_then(|second_arg| {
-            // Skip keyword arguments
-            if second_arg.kind() == "keyword_argument" {
-                return None;
-            }
-            let text = node_text_ref(&second_arg, source);
-            // For dotted references like "views.list_users", take the last segment
-            if let Some(last_dot) = text.rfind('.') {
-                Some(text[last_dot + 1..].to_string())
-            } else if !text.is_empty()
-                && text.chars().all(|c| c.is_alphanumeric() || c == '_')
-            {
-                // Simple identifier reference
-                Some(text.to_string())
-            } else {
-                None
-            }
-        });
+    let handler_name = args.named_child(1).and_then(|second_arg| {
+        // Skip keyword arguments
+        if second_arg.kind() == "keyword_argument" {
+            return None;
+        }
+        let text = node_text_ref(&second_arg, source);
+        // For dotted references like "views.list_users", take the last segment
+        if let Some(last_dot) = text.rfind('.') {
+            Some(text[last_dot + 1..].to_string())
+        } else if !text.is_empty() && text.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            // Simple identifier reference
+            Some(text.to_string())
+        } else {
+            None
+        }
+    });
 
     extraction.interfaces.push(Interface {
         method: HttpMethod::All,

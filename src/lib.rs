@@ -1,5 +1,6 @@
 pub mod engine;
 pub mod error;
+pub mod git;
 pub mod model;
 pub mod parser;
 pub mod search;
@@ -19,7 +20,7 @@ pub use model::graph_analysis::{
     GraphAnalyzer, ProcessFlow,
 };
 pub use model::types::{
-    estimate_tokens, EnvDependency, FileExtraction, FileRole, ParameterLocation, ResolutionMethod,
-    RouteParameter, TokenBudget,
+    estimate_tokens, EnvDependency, FileExtraction, FileRole, GitFileMetadata, GitStats,
+    ParameterLocation, ResolutionMethod, RouteParameter, TokenBudget,
 };
 pub use workspace::{WorkspaceKind, WorkspaceLayout, WorkspacePackage};

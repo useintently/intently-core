@@ -332,6 +332,7 @@ impl CodeModelBuilder {
             total_directories,
             total_test_symbols,
             total_env_dependencies,
+            git_stats: None, // Populated by engine after git metadata merge
         };
 
         CodeModel {
@@ -427,9 +428,8 @@ impl CodeModelBuilder {
         data_models
             .sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
 
-        env_dependencies.sort_by(|a, b| {
-            (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line))
-        });
+        env_dependencies
+            .sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
 
         let language = dominant_language_from_counts(&lang_counts);
 
@@ -512,6 +512,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
+            git_metadata: None,
         }
     }
 
@@ -674,6 +675,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
+            git_metadata: None,
         };
 
         let model = build_code_model(&[ext], "proj");
@@ -859,6 +861,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
+            git_metadata: None,
         };
         builder.set_file(&ext);
         let model = builder.build();
@@ -900,6 +903,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
+            git_metadata: None,
         };
         builder.set_file(&ext);
         let model = builder.build();
@@ -932,6 +936,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
+            git_metadata: None,
         };
         builder.set_file(&ext);
         assert_eq!(builder.build().stats.total_imports, 1);
@@ -963,6 +968,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
+            git_metadata: None,
         };
         let ext2 = FileExtraction {
             file: PathBuf::from("src/b.ts"),
@@ -982,6 +988,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 0,
             content_hash: None,
+            git_metadata: None,
         };
         builder.set_file(&ext1);
         builder.set_file(&ext2);
@@ -1278,6 +1285,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 100,
             content_hash: None,
+            git_metadata: None,
         };
         let ext_b = FileExtraction {
             file: PathBuf::from("/repo/b/src/lib.ts"),
@@ -1312,6 +1320,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 200,
             content_hash: None,
+            git_metadata: None,
         };
 
         builder.set_file_in_component(&ext_a, "a");
@@ -1348,6 +1357,7 @@ mod tests {
             file_role: role,
             estimated_tokens: 0,
             content_hash: None,
+            git_metadata: None,
         }
     }
 

@@ -286,6 +286,7 @@ pub fn new_extraction(
         file_role: FileRole::Implementation,
         estimated_tokens: 0,
         content_hash: None,
+        git_metadata: None,
     }
 }
 

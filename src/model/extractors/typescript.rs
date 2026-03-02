@@ -121,23 +121,21 @@ fn try_extract_route(node: &Node, source: &str, file_path: &Path, extraction: &m
 
     // The last argument is typically the handler function.
     // If it's an identifier (named function reference), capture its name.
-    let handler_name = args
-        .last()
-        .and_then(|arg| {
-            let trimmed = arg.text.trim();
-            // Only capture simple identifiers, not arrow functions or other expressions
-            if !trimmed.is_empty()
-                && !trimmed.contains('(')
-                && !trimmed.contains(')')
-                && !trimmed.contains('=')
-                && !trimmed.contains('{')
-                && trimmed.chars().all(|c| c.is_alphanumeric() || c == '_')
-            {
-                Some(trimmed.to_string())
-            } else {
-                None
-            }
-        });
+    let handler_name = args.last().and_then(|arg| {
+        let trimmed = arg.text.trim();
+        // Only capture simple identifiers, not arrow functions or other expressions
+        if !trimmed.is_empty()
+            && !trimmed.contains('(')
+            && !trimmed.contains(')')
+            && !trimmed.contains('=')
+            && !trimmed.contains('{')
+            && trimmed.chars().all(|c| c.is_alphanumeric() || c == '_')
+        {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    });
 
     extraction.interfaces.push(Interface {
         method: http_method,

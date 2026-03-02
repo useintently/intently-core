@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Handler name extraction for Express (last call arg), NestJS (method name), FastAPI/Flask (decorated function name), Go Gin/Echo (last call arg), Spring Boot (method name), ASP.NET (method name), Rails (action from `to:` arg)
 - `ParameterLocation`, `RouteParameter` re-exported from public API
 - 8 new `extract_path_params` unit tests (colon, curly, Flask angle bracket, constraints, dedup, mixed styles)
+- `GitFileMetadata` struct — per-file git metadata (last modified, last author, commit count, distinct authors) for churn and ownership analysis
+- `GitStats` struct — repository-level aggregate statistics (total authors, total commits, avg commits per file, top 10 hottest files by churn)
+- `git_metadata: Option<GitFileMetadata>` on `FileExtraction` — populated when `git` feature is enabled and project is inside a git repository
+- `git_stats: Option<GitStats>` on `CodeModelStats` — aggregate churn statistics computed from per-file metadata
+- `git` Cargo feature flag — enables git metadata collection via `git log` (requires `git` on PATH), walks up to 1000 commits from HEAD, graceful degradation when not in a git repo
+- `git/metadata.rs` module — `compute_git_metadata()` and `compute_git_stats()` functions behind `#[cfg(feature = "git")]`
+- `GitFileMetadata`, `GitStats` re-exported from public API
+- 9 new git metadata unit tests (parsing, aggregation, edge cases) + 1 ignored integration test against own repo
 - 3 new monorepo test fixtures: `npm_monorepo/` (npm workspace, 2 TS/Express packages), `go_workspace/` (Go workspace, 2 Gin modules), `uv_workspace/` (uv workspace, 2 FastAPI packages) — exercises all 5 workspace detection paths end-to-end
 - `analyze_fixtures` example binary (`cargo run --example analyze_fixtures`) — runs IntentlyEngine on all fixtures, outputs per-fixture JSON + summary table to stderr, supports single-fixture filter and `--summary` mode
 - 9 new integration tests: 3 per new monorepo fixture (component detection, workspace kind, route/symbol extraction) — from 534 to 543 total tests

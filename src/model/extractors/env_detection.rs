@@ -109,11 +109,7 @@ fn try_match_js(node: Node, source: &str, file_path: &Path) -> Option<EnvDepende
     if kind == "member_expression" || kind == "subscript_expression" {
         // Check for process.env.X or import.meta.env.X pattern
         if text.starts_with("process.env.") || text.starts_with("import.meta.env.") {
-            let var_name = text
-                .rsplit('.')
-                .next()
-                .unwrap_or("<dynamic>")
-                .to_string();
+            let var_name = text.rsplit('.').next().unwrap_or("<dynamic>").to_string();
             // Avoid matching the parent `process.env` part itself
             if var_name != "env" {
                 return Some(EnvDependency {
@@ -123,7 +119,9 @@ fn try_match_js(node: Node, source: &str, file_path: &Path) -> Option<EnvDepende
             }
         }
         // Dynamic access: process.env[something]
-        if kind == "subscript_expression" && (text.starts_with("process.env[") || text.starts_with("import.meta.env[")) {
+        if kind == "subscript_expression"
+            && (text.starts_with("process.env[") || text.starts_with("import.meta.env["))
+        {
             return Some(EnvDependency {
                 var_name: "<dynamic>".to_string(),
                 anchor: anchor_from_node(&node, file_path),
@@ -366,10 +364,7 @@ fn extract_string_value(node: Node, source: &str) -> Option<String> {
         || kind == "encapsed_string"
     {
         let text = node.utf8_text(source.as_bytes()).ok()?;
-        let stripped = text
-            .trim_matches('"')
-            .trim_matches('\'')
-            .trim_matches('`');
+        let stripped = text.trim_matches('"').trim_matches('\'').trim_matches('`');
         if !stripped.is_empty() {
             return Some(stripped.to_string());
         }
@@ -604,11 +599,7 @@ mod tests {
 
     #[test]
     fn unsupported_language_returns_empty() {
-        let deps = env_deps_for(
-            "let x = 1;",
-            SupportedLanguage::Swift,
-            "main.swift",
-        );
+        let deps = env_deps_for("let x = 1;", SupportedLanguage::Swift, "main.swift");
         assert!(deps.is_empty());
     }
 }

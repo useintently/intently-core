@@ -816,6 +816,10 @@ pub struct CodeModelStats {
     /// Total number of environment variable references across all files.
     #[serde(default)]
     pub total_env_dependencies: usize,
+    /// Repository-level git statistics (churn, authorship).
+    /// `None` when the `git` feature is disabled or not in a git repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_stats: Option<GitStats>,
 }
 
 /// Extraction results from a single source file, prior to aggregation.
@@ -843,6 +847,10 @@ pub struct FileExtraction {
     /// `None` for extractions created before hashing was added.
     #[serde(default)]
     pub content_hash: Option<[u8; 32]>,
+    /// Per-file git metadata (churn, authorship, last modified).
+    /// `None` when the `git` feature is disabled or the file is not tracked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_metadata: Option<GitFileMetadata>,
 }
 
 fn default_file_role() -> FileRole {
@@ -852,6 +860,40 @@ fn default_file_role() -> FileRole {
 /// Serde helper for `#[serde(skip_serializing_if = "is_false")]`.
 fn is_false(b: &bool) -> bool {
     !(*b)
+}
+
+// ---------------------------------------------------------------------------
+// Git metadata types (defined unconditionally for deserialization compat)
+// ---------------------------------------------------------------------------
+
+/// Per-file git metadata for churn and ownership analysis.
+///
+/// Computed by walking commit history (up to 1000 commits) and aggregating
+/// per-file statistics. Available only when the `git` feature is enabled
+/// and the project is inside a git repository.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GitFileMetadata {
+    /// Unix timestamp of the most recent commit touching this file.
+    pub last_modified: Option<i64>,
+    /// Name or email of the author of the most recent commit.
+    pub last_author: Option<String>,
+    /// Number of commits that modified this file (churn proxy).
+    pub commit_count: usize,
+    /// Number of distinct authors who modified this file.
+    pub distinct_authors: usize,
+}
+
+/// Aggregate git statistics across the entire repository.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GitStats {
+    /// Total distinct authors across all analyzed commits.
+    pub total_authors: usize,
+    /// Total commits walked (capped at 1000).
+    pub total_commits: usize,
+    /// Average number of commits per file.
+    pub avg_commits_per_file: f64,
+    /// Top 10 files by commit count (highest churn).
+    pub hottest_files: Vec<(PathBuf, usize)>,
 }
 
 /// An import/require statement found in a source file.
@@ -909,6 +951,7 @@ mod tests {
                 total_directories: 0,
                 total_test_symbols: 0,
                 total_env_dependencies: 0,
+                git_stats: None,
             },
             file_tree: None,
         };
@@ -955,6 +998,7 @@ mod tests {
             file_role: FileRole::Implementation,
             estimated_tokens: 250,
             content_hash: None,
+            git_metadata: None,
         };
 
         let json = serde_json::to_string(&extraction).unwrap();
