@@ -40,4 +40,4 @@ When delegating to a persona, provide:
 
 ## Tools
 
-Read, Grep, Glob, Bash, Task
+Read, Grep, Glob, Bash, TaskCreate, TaskUpdate, TaskList, TaskGet

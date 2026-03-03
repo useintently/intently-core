@@ -1,64 +1,37 @@
+---
+name: reviewing-code
+description: General code review for intently-core Rust library. Validates correctness, clarity, error handling, naming, test coverage, unsafe blocks, and KISS/YAGNI/DRY principles. Use as the default review skill when no specialized review (rust, performance, security, architecture) is requested.
+---
+
 # Code Review
 
-General code review for Rust and TypeScript in the Intently IDE project.
+## Critical rules
 
-## Trigger
+**ALWAYS:**
+- Read the code under review BEFORE writing any feedback — never review from memory or assumptions
+- Test every new behavior with at least one unit test following AAA pattern (Arrange-Act-Assert)
+- Propagate errors with context using `?` — callers need to know what failed and why
+- Write regression tests BEFORE fixing bugs — prove the bug exists, then fix it
+- Name things specifically — `route_parameter` not `param`, `file_extraction` not `result`
 
-Activate for any PR or code change that does not match a more specific review skill.
+**NEVER:**
+- Approve code with `unwrap()` in library paths — this is a crash in production
+- Approve swallowed errors (`let _ = result;`, empty `catch`) — silent failures corrupt data
+- Add premature abstractions (trait with 1 implementor, config nobody asked for) — YAGNI
+- Duplicate business logic across modules — if changing one requires changing the other, extract
+- Comment "what" the code does — only comment "why" when the reason isn't self-evident
 
-Keywords: "code review", "review code", "review PR", "review changes", "/review"
+## What to validate
 
-## What This Skill Does
+1. **Correctness** — Logic matches stated intent, edge cases handled
+2. **Clarity** — Functions are small (SRP), names are specific, comments explain "why" not "what"
+3. **Error handling** — `Result<T, E>` with `thiserror`, no panics in library code, errors propagate with context
+4. **Naming** — `snake_case` functions, `PascalCase` types, `UPPER_CASE` constants. Specific names (not `data`, `info`, `temp`)
+5. **Tests** — New logic has unit tests, bug fixes have regression tests, AAA pattern
+6. **Unsafe** — Every `unsafe` has a `// SAFETY:` comment, minimal scope, safe alternative considered
+7. **Principles** — No premature abstractions (YAGNI), no duplicated business logic (DRY), no unnecessary complexity (KISS)
 
-1. **Correctness** — Verify the code does what it claims
-   - Logic matches the stated intent (PR description, ticket, commit message)
-   - Edge cases are handled (empty inputs, overflows, None/null values)
-   - Off-by-one errors, boundary conditions checked
-
-2. **Clarity** — Ensure code is readable and maintainable
-   - Functions are small and focused (SRP)
-   - Names are specific and descriptive (no `data`, `info`, `temp`, `handle`)
-   - Complex logic has explanatory comments on the "why", not the "what"
-   - No clever one-liners that sacrifice readability (KISS)
-
-3. **Error Handling** — Validate error management
-   - Rust: uses `Result<T, E>` with `thiserror` for domain errors
-   - TypeScript: uses typed error handling, not bare `catch(e)`
-   - No panics in library code (Rust: `unwrap()`, `expect()` only in tests/CLI entry)
-   - Errors propagate with context, not swallowed silently
-
-4. **Naming** — Check naming conventions
-   - Rust: `snake_case` functions, `PascalCase` types, `UPPER_CASE` constants
-   - TypeScript: `camelCase` functions/variables, `PascalCase` types/components
-   - File names: `snake_case.rs`, `kebab-case.ts`/`PascalCase.tsx`
-
-5. **Test Coverage** — Verify tests exist for new/changed logic
-   - New business logic has unit tests
-   - Bug fixes include regression tests
-   - Tests follow AAA pattern with descriptive names
-
-6. **Unsafe Blocks** — Rust-specific: justify every `unsafe`
-   - Safety invariant documented in a `// SAFETY:` comment
-   - Minimal scope (smallest possible unsafe block)
-   - Alternative safe approach considered and rejected with reason
-
-7. **Principles Check** — Apply KISS, YAGNI, DRY, SOLID
-   - No premature abstractions (YAGNI)
-   - No duplicated business logic (DRY)
-   - No unnecessary complexity (KISS)
-
-## What to Check
-
-- [ ] Logic matches stated intent
-- [ ] Edge cases handled
-- [ ] Error handling is explicit and typed
-- [ ] No panics in library code
-- [ ] Names are specific and follow conventions
-- [ ] Tests cover new/changed behavior
-- [ ] Unsafe blocks justified with SAFETY comments
-- [ ] KISS/YAGNI/DRY principles respected
-
-## Output Format
+## Output format
 
 ```
 ## Code Review: <file_path>
@@ -68,9 +41,6 @@ Keywords: "code review", "review code", "review PR", "review changes", "/review"
 
 ### Issues Found
 - [CRITICAL/MAJOR/MINOR] <description> (line X)
-
-### Suggestions
-- <optional improvement suggestions>
 
 ### Verdict: APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION
 ```

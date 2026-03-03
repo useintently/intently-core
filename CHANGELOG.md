@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 6 research skills (`.claude/skills/research-*/`) for systematic state-of-the-art tracking across core domains: parsing & AST techniques, code model & IR design, semantic diff algorithms, graph-based program analysis, symbol resolution & type systems, and framework/extractor evolution — each with domain-specific sources, evaluation criteria, and standardized Research Report output format
+- `prompt-review` skill (`.claude/skills/prompt-review/`) — reviews and enriches prompts for AI coding assistants using a 7-dimension framework (context, structure, specificity, decomposition, role, examples, technique), shows original→enriched transformation with pattern names and severity levels
+- `roadmap-high-level` skill (`.claude/skills/roadmap-high-level/`) — creates strategic roadmaps with 4-6 themed milestones, dependency mapping, ICE priority ranking, and state assessment grounded in CLAUDE.md/CHANGELOG/ADRs evidence
+- `roadmap-exec` skill (`.claude/skills/roadmap-exec/`) — decomposes a high-level theme or goal into ordered executable tasks with acceptance criteria, effort estimates (S/M/L/XL), dependencies, risk register, and milestone grouping — output feeds directly into task creation
 - Diverse real-world validation suite (`tests/diverse_validation.rs`): 130 repos across 13 language groups (10+ per language), table-driven with automatic disk cleanup via TempDir — TypeScript/JavaScript, Python, Java, Kotlin, C#, Go, PHP, Ruby, Rust, C, C++, Swift, Scala
 - Shared test helpers module (`tests/common/mod.rs`): extracted `clone_repo`, `analyze_repo`, `print_report`, and 21 assertion helpers for reuse across validation test files
 - `is_test: bool` field on `Symbol` — marks test functions/methods across 9 languages via `LanguageBehavior::is_test_symbol()`: naming conventions (Python `test_*`, Go `Test*`, Ruby `test_*`, PHP `test*`, TS/JS `test*`), annotations (Java `@Test`), attributes (Rust `#[test]`, C# `[Fact]`/`[Test]`/`[Theory]`) — BDD `describe`/`it` blocks are NOT detected (they're call_expressions, not function_declarations)

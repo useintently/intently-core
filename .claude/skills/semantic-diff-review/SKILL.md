@@ -1,73 +1,51 @@
+---
+name: reviewing-semantic-diff
+description: Reviews semantic diff implementation in intently-core. Validates that diffs operate on the CodeModel (not raw text), checks IR comparison correctness, false positive/negative analysis, and performance. Use when changes touch src/model/diff.rs, SemanticDiff types, or CodeModel comparison logic.
+---
+
 # Semantic Diff Review
 
-Review semantic diff implementation in Intently.
+## Critical rules
 
-## Trigger
+**ALWAYS:**
+- Operate on the CodeModel IR, never on raw source text — this is a semantic diff, not a textual diff
+- Produce empty diffs for cosmetic-only changes (whitespace, comments, formatting, import reordering)
+- Capture ALL behavioral changes: added/removed components, changed contracts, new/removed dependencies
+- Detect renames and moves as such — not as remove + add (avoids false positives)
+- Verify algorithm complexity is O(n log n) or better for typical cases
 
-Activate when PRs or changes touch:
-- `crates/Intently_core/src/diff/` (any file)
-- IR comparison logic
-- `semantic_diff.json` schema definitions
+**NEVER:**
+- Diff raw source text or line-based content — always diff the CodeModel IR structures
+- Produce spurious diffs for changes that don't affect behavior (false positives)
+- Miss a behavioral change that should have been captured (false negatives are the worst bug here)
+- Allow quadratic blowup on large codebases — diff must scale linearly or linearithmically
+- Modify `SemanticDiff` output types without updating all consumers in `engine.rs`
 
-Keywords: "semantic diff review", "review diff", "semantic diff", "behavioral diff"
+## Key context
 
-## What This Skill Does
+- **File**: `src/model/diff.rs` — SemanticDiff computation
+- **Core invariant**: Diffs operate on the CodeModel IR, not raw source text. Whitespace, formatting, and comment-only changes MUST produce empty diffs.
+- **Output type**: `SemanticDiff` with added/removed/modified components, changed contracts, new dependencies
 
-1. **Behavioral vs Textual** — Verify diff is semantic, not line-based
-   - Diff operates on the IR (CodeModel), not on raw source text
-   - Whitespace, formatting, and comment changes produce empty diffs
-   - Renamed symbols with same behavior produce rename-only diffs
+## Checklist
 
-2. **IR Comparison Correctness** — Validate IR diff algorithm
-   - Components added/removed are detected correctly
-   - Contract changes (inputs, outputs, types) are captured
-   - Dependency graph changes (new edges, removed edges) are captured
-   - Flow changes (control flow, data flow) are captured
+- [ ] Diff operates on CodeModel IR, not on raw text
+- [ ] All IR element types are compared (components, interfaces, dependencies, sinks, symbols)
+- [ ] Cosmetic changes (whitespace, comments, formatting) produce empty diffs
+- [ ] Behavioral changes are always captured — no false negatives
+- [ ] No false positives (spurious changes flagged as behavioral)
+- [ ] Renames and moves are detected correctly (not reported as remove + add)
+- [ ] Algorithm is at most O(n log n) for typical cases — no quadratic blowup
 
-3. **False Positive/Negative Analysis** — Check diff accuracy
-   - False positives: changes flagged as behavioral when they are cosmetic
-   - False negatives: behavioral changes missed by the diff
-   - Edge cases: moves, renames, split/merge of components
-
-4. **Schema Compliance** — Validate `semantic_diff.json` output
-   - Diff includes: affected components, change type, before/after IR snapshots
-   - Each change entry has a severity (breaking, compatible, cosmetic)
-   - Report is machine-parseable and versioned
-
-5. **Performance** — Verify diff is efficient
-   - Diff is computed incrementally where possible
-   - Large codebases do not cause quadratic blowup
-   - Diff computation has a timeout/budget mechanism
-
-## What to Check
-
-- [ ] Diff operates on IR, not on raw text
-- [ ] All IR element types are compared (components, deps, contracts, flows)
-- [ ] Cosmetic changes produce empty or cosmetic-only diffs
-- [ ] Behavioral changes are always captured (no false negatives)
-- [ ] `semantic_diff.json` conforms to schema
-- [ ] Diff algorithm is at most O(n log n) for typical cases
-- [ ] Unit tests cover: add, remove, rename, modify, move, split, merge
-
-## Output Format
+## Output format
 
 ```
 ## Semantic Diff Review: <file_path>
 
-### Behavioral Correctness
-- [PASS/FAIL] <detail>
+### Findings
+- [PASS/FAIL] <category>: <detail>
 
-### IR Comparison
-- [PASS/FAIL] <detail>
-
-### False Positive/Negative Risk
-- [LOW/MEDIUM/HIGH] <detail>
-
-### Schema Compliance
-- [PASS/FAIL] <detail>
-
-### Performance
-- [PASS/FAIL] <detail>
+### False Positive/Negative Risk: LOW / MEDIUM / HIGH
 
 ### Verdict: APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION
 ```

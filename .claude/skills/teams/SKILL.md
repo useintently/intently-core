@@ -1,49 +1,42 @@
-# Team Routing
+---
+name: routing-teams
+description: Routes requests, issues, and tasks to the correct intently-core persona. Kael Okonkwo owns core engine, CodeModel, semantic diff, KnowledgeGraph, extractors, architecture, and performance. Tomás Herrera owns security review, dependency audit, input validation, and unsafe code. Use when identifying who should handle a request or task.
+---
 
-Route requests, issues, and tasks to the correct persona.
+# Routing Teams
 
-## Trigger
+## Critical rules
 
-Activate when the user needs to identify who should handle a request or task.
+**ALWAYS:**
+- Analyze the full request domain before routing — a "refactor extractors" request touches both Kael (architecture) and Tomás (security patterns)
+- Flag cross-cutting concerns explicitly — most non-trivial changes need Kael as primary + Tomás for security review
+- Include a suggested next action in the routing decision — routing without action is incomplete
 
-Keywords: "who handles", "which team", "route to", "assign to", "responsible for"
+**NEVER:**
+- Route without reading the request carefully — keywords alone can be misleading
+- Skip security review on changes touching extractors, dependencies, or error handling — always involve Tomás
+- Assign to personas that don't exist — the team is exactly Kael Okonkwo and Tomás Herrera
 
-## What This Skill Does
+## Routing table
 
-1. **Analyze Request** — Understand the domain of the request
-   - Identify key terms and affected subsystems
-   - Map to one or more persona domains
-   - Determine primary vs secondary ownership
+| Domain | Owner |
+|--------|-------|
+| Core Engine, CodeModel, Semantic Diff, KnowledgeGraph, Extractors, Architecture, Performance | **Kael Okonkwo** |
+| Security, Dependency Audit, Input Validation, Unsafe Code, Supply Chain | **Tomás Herrera** |
 
-2. **Route to Persona** — Match request to the routing table below
-3. **Flag Cross-Cutting** — Identify if multiple personas need coordination
+## Routing logic
 
-## Routing Table
+1. Mentions Rust, engine, CodeModel, diff, graph, extractors, performance, benchmarks, architecture → **Kael**
+2. Mentions security, secrets, PII, dependency audit, input validation, unsafe, supply chain → **Tomás**
+3. Cross-cutting → **Kael** as primary, **Tomás** for security review
 
-| Domain | Owner | Agent File | Key Files |
-|--------|-------|------------|-----------|
-| Core Engine, CodeModel, Semantic Diff, KnowledgeGraph, Extractors, Architecture, Performance | Kael Okonkwo | kael-okonkwo | `src/`, `Cargo.toml`, `tests/` |
-| Security Review, Dependency Audit, Input Validation, Unsafe Code | Tomás Herrera | tomas-herrera | `src/model/extractors/`, `Cargo.toml` |
-
-## Routing Logic
-
-1. If the request mentions **Rust, core engine, IR, CodeModel, semantic diff, KnowledgeGraph, extractors, performance, benchmarks, or architecture** -> Kael
-2. If the request mentions **security, secrets, PII, dependency audit, input validation, unsafe code, supply chain** -> Tomás
-3. If cross-cutting -> Kael as primary, Tomás for security review
-
-## Output Format
+## Output format
 
 ```
 ## Routing Decision
 
 ### Request: <summarized request>
-
-### Primary Owner: <persona_name>
-- Reason: <why this persona owns it>
-
-### Secondary Personas (if applicable):
-- <persona_name>: <reason for involvement>
-
-### Suggested Action:
-<what should happen next>
+### Primary Owner: <persona> — <reason>
+### Secondary (if applicable): <persona> — <reason>
+### Suggested Action: <what should happen next>
 ```
