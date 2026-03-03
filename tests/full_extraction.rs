@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use intently_core::model::types::*;
-use intently_core::{GraphStats, IntentlyEngine, WorkspaceKind};
+use intently_core::{IntentlyEngine, WorkspaceKind};
 
 /// Run full analysis on a fixture project and return the result.
 fn analyze_fixture(project_name: &str) -> intently_core::ExtractionResult {
@@ -1553,11 +1553,15 @@ fn express_ecommerce_extracts_typescript_imports() {
         "Expected imports from external packages (axios, express)"
     );
 
-    // Stats should match
+    // Stats: total_imports counts ReferenceKind::Import references (not ImportInfo entries)
+    let import_ref_count = result.model.components[0]
+        .references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Import)
+        .count();
     assert_eq!(
-        result.model.stats.total_imports,
-        imports.len(),
-        "stats.total_imports should match actual import count"
+        result.model.stats.total_imports, import_ref_count,
+        "stats.total_imports should match ReferenceKind::Import reference count"
     );
 }
 
@@ -1580,56 +1584,68 @@ fn nestjs_api_extracts_imports() {
 #[test]
 fn spring_ecommerce_import_count_matches_stats() {
     let result = analyze_fixture("spring_ecommerce");
-    let imports = &result.model.components[0].imports;
+    let comp = &result.model.components[0];
 
-    // Java import extraction is not yet implemented at the extractor level.
-    // Verify the stats are consistent with the actual data.
+    // total_imports counts ReferenceKind::Import references
+    let import_ref_count = comp
+        .references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Import)
+        .count();
     assert_eq!(
-        result.model.stats.total_imports,
-        imports.len(),
-        "stats.total_imports should match actual import count"
+        result.model.stats.total_imports, import_ref_count,
+        "stats.total_imports should match ReferenceKind::Import reference count"
     );
 }
 
 #[test]
 fn fastapi_ecommerce_import_count_matches_stats() {
     let result = analyze_fixture("fastapi_ecommerce");
-    let imports = &result.model.components[0].imports;
+    let comp = &result.model.components[0];
 
-    // Python import extraction is not yet implemented at the extractor level.
-    // Verify stats consistency.
+    // total_imports counts ReferenceKind::Import references
+    let import_ref_count = comp
+        .references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Import)
+        .count();
     assert_eq!(
-        result.model.stats.total_imports,
-        imports.len(),
-        "stats.total_imports should match actual import count"
+        result.model.stats.total_imports, import_ref_count,
+        "stats.total_imports should match ReferenceKind::Import reference count"
     );
 }
 
 #[test]
 fn aspnet_ecommerce_import_count_matches_stats() {
     let result = analyze_fixture("aspnet_ecommerce");
-    let imports = &result.model.components[0].imports;
+    let comp = &result.model.components[0];
 
-    // C# import extraction is not yet implemented at the extractor level.
-    // Verify stats consistency.
+    // total_imports counts ReferenceKind::Import references
+    let import_ref_count = comp
+        .references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Import)
+        .count();
     assert_eq!(
-        result.model.stats.total_imports,
-        imports.len(),
-        "stats.total_imports should match actual import count"
+        result.model.stats.total_imports, import_ref_count,
+        "stats.total_imports should match ReferenceKind::Import reference count"
     );
 }
 
 #[test]
 fn gin_ecommerce_import_count_matches_stats() {
     let result = analyze_fixture("gin_ecommerce");
-    let imports = &result.model.components[0].imports;
+    let comp = &result.model.components[0];
 
-    // Go import extraction is not yet implemented at the extractor level.
-    // Verify stats consistency.
+    // total_imports counts ReferenceKind::Import references
+    let import_ref_count = comp
+        .references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Import)
+        .count();
     assert_eq!(
-        result.model.stats.total_imports,
-        imports.len(),
-        "stats.total_imports should match actual import count"
+        result.model.stats.total_imports, import_ref_count,
+        "stats.total_imports should match ReferenceKind::Import reference count"
     );
 }
 
@@ -2150,12 +2166,15 @@ fn all_framework_fixtures_produce_complete_extraction() {
             stats.total_references
         );
 
-        // Imports (only TypeScript extractors currently produce ImportInfo)
-        // Other languages: import count is tracked for consistency but may be 0
+        // Imports: total_imports counts ReferenceKind::Import references
+        let import_ref_count = comp
+            .references
+            .iter()
+            .filter(|r| r.reference_kind == ReferenceKind::Import)
+            .count();
         assert_eq!(
-            stats.total_imports,
-            comp.imports.len(),
-            "[{fixture}] stats.total_imports should match actual import count"
+            stats.total_imports, import_ref_count,
+            "[{fixture}] stats.total_imports should match ReferenceKind::Import reference count"
         );
 
         // Module boundaries (only for projects with subdirectories)
@@ -2774,5 +2793,133 @@ fn git_metadata_populated_on_own_repo() {
     assert!(
         extractions_with_git > 0,
         "at least some files should have git metadata"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Python import extraction and resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn python_imports_fixture_extracts_imports() {
+    let result = analyze_fixture("python_imports");
+    let comp = &result.model.components[0];
+
+    // 5 Python files (main.py, config.py, app/models.py, app/routes.py, app/services.py)
+    // __init__.py is empty so may not produce extractions
+    assert!(
+        result.files_analyzed >= 4,
+        "Expected ≥4 Python files analyzed, got {}",
+        result.files_analyzed
+    );
+
+    // Python import extraction should produce ImportInfo entries
+    let total_import_infos: usize = comp.imports.len();
+    assert!(
+        total_import_infos >= 5,
+        "Expected ≥5 ImportInfo entries from Python files, got {}",
+        total_import_infos
+    );
+
+    // Verify import references exist in the reference list
+    let import_refs: Vec<&Reference> = comp
+        .references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Import)
+        .collect();
+    assert!(
+        !import_refs.is_empty(),
+        "Expected import references in the model, got 0"
+    );
+
+    // stats.total_imports should match import reference count
+    assert_eq!(
+        result.model.stats.total_imports,
+        import_refs.len(),
+        "stats.total_imports should match ReferenceKind::Import reference count"
+    );
+}
+
+#[test]
+fn python_imports_fixture_classifies_stdlib_as_external() {
+    let result = analyze_fixture("python_imports");
+    let comp = &result.model.components[0];
+
+    let import_refs: Vec<&Reference> = comp
+        .references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Import)
+        .collect();
+
+    // Stdlib imports (os, sys, json, logging, etc.) should be External, not Unresolved
+    let external_refs: Vec<&&Reference> = import_refs
+        .iter()
+        .filter(|r| r.resolution_method == ResolutionMethod::External)
+        .collect();
+    assert!(
+        !external_refs.is_empty(),
+        "Expected some External resolution method references (stdlib/package imports)"
+    );
+
+    // Verify specific stdlib imports are classified as External
+    let os_import = import_refs.iter().find(|r| r.target_symbol == "os");
+    assert!(os_import.is_some(), "Expected an import reference for 'os'");
+    assert_eq!(
+        os_import.unwrap().resolution_method,
+        ResolutionMethod::External,
+        "'os' import should be External, not Unresolved"
+    );
+}
+
+#[test]
+fn python_imports_fixture_resolves_relative_imports() {
+    let result = analyze_fixture("python_imports");
+    let comp = &result.model.components[0];
+
+    let import_refs: Vec<&Reference> = comp
+        .references
+        .iter()
+        .filter(|r| r.reference_kind == ReferenceKind::Import)
+        .collect();
+
+    // Relative imports (from .models import User) should resolve with ImportBased
+    let import_based_refs: Vec<&&Reference> = import_refs
+        .iter()
+        .filter(|r| r.resolution_method == ResolutionMethod::ImportBased)
+        .collect();
+
+    // app/routes.py imports from .models (User, Product) and app/services.py imports from .models
+    // These should resolve to app/models.py since the files exist in the fixture
+    assert!(
+        !import_based_refs.is_empty(),
+        "Expected some ImportBased references from resolved relative imports, got 0. \
+         All import refs: {:?}",
+        import_refs
+            .iter()
+            .map(|r| format!(
+                "{}→{} ({:?})",
+                r.source_file.display(),
+                r.target_symbol,
+                r.resolution_method
+            ))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn python_imports_fixture_has_resolution_method_distribution() {
+    let result = analyze_fixture("python_imports");
+
+    let dist = &result.model.stats.resolution_method_distribution;
+    assert!(
+        !dist.is_empty(),
+        "resolution_method_distribution should not be empty"
+    );
+
+    // Should have at least 'external' bucket (from stdlib/package imports)
+    assert!(
+        dist.contains_key("external"),
+        "Expected 'external' in resolution_method_distribution, got: {:?}",
+        dist
     );
 }

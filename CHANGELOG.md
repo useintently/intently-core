@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Diverse real-world validation suite (`tests/diverse_validation.rs`): 130 repos across 13 language groups (10+ per language), table-driven with automatic disk cleanup via TempDir — TypeScript/JavaScript, Python, Java, Kotlin, C#, Go, PHP, Ruby, Rust, C, C++, Swift, Scala
+- Shared test helpers module (`tests/common/mod.rs`): extracted `clone_repo`, `analyze_repo`, `print_report`, and 21 assertion helpers for reuse across validation test files
 - `is_test: bool` field on `Symbol` — marks test functions/methods across 9 languages via `LanguageBehavior::is_test_symbol()`: naming conventions (Python `test_*`, Go `Test*`, Ruby `test_*`, PHP `test*`, TS/JS `test*`), annotations (Java `@Test`), attributes (Rust `#[test]`, C# `[Fact]`/`[Test]`/`[Theory]`) — BDD `describe`/`it` blocks are NOT detected (they're call_expressions, not function_declarations)
 - `total_test_symbols: usize` field on `CodeModelStats` — aggregated count of `is_test` symbols across all components
 - 14 new is_test detection unit tests (positive + negative for all 9 language families, from 460 to 474 unit tests)
@@ -68,8 +70,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Real-world validation test for incremental pipeline with semantic diff on modified route files
 - Real-world validation test for ast-grep structural search (`require()` pattern matching on real code)
 - `assert_stats_populated` and `assert_content_hashes_present` assertion helpers in real-world validation harness
+- Real-world validation: npm workspace test (`calcom/cal.com`) and Go workspace test (`uber-go/nilaway`) — covers 4 of 5 workspace formats end-to-end
+- Real-world validation: medium-to-large repo tests — `saleor/saleor` (Python/Django, ~1500 files) and `spring-projects/spring-boot` (Java framework)
+- Real-world validation: Python import stress tests — `Textualize/rich` (heavy relative imports) and `httpie/cli` (moderate imports) validating `ImportBased` and `External` resolution methods
+- Real-world validation: Phase 3 feature tests — env dependencies (FastAPI), test symbols (Spring PetClinic), enriched routes (Express + Spring) validating `EnvDependency`, `is_test`, `handler_name`, and `RouteParameter` extraction on real codebases
+- Real-world validation: `summary_workspace_formats` and `summary_phase3_features` summary tables for workspace and Phase 3 coverage reporting
+- 7 new assertion helpers in real-world validation harness: `assert_has_env_dependencies`, `assert_has_test_symbols`, `assert_has_enriched_routes`, `assert_has_import_based_references`, `assert_has_external_references`, `assert_resolution_distribution_has`, `assert_workspace_layout`
+- Real-world validation: diverse framework tests — Next.js (`calcom/cal.com` apps/web, `t3-oss/create-t3-app`), Vite (`vitejs/vite`), Remix (`remix-run/indie-stack`), eShopOnWeb (ASP.NET reference architecture), Gitea (large Go), Django framework (large Python), Laravel framework (large PHP), Rails framework (large Ruby)
+- Real-world validation: large-scale stress testing — Django (3006 files, 42K symbols, 223K refs), Rails (3452 files, 47K symbols, 292K refs), Gitea (3045 files, 17K symbols, 145K refs), cal.com workspace (7407 files, 219 packages, 306K refs)
+- `# Examples` doc sections on 5 key public functions: `IntentlyEngine::new()`, `full_analysis()`, `KnowledgeGraph::from_code_model()`, `impact_analysis()`, `AnalysisPipeline::standard()`
+- Module-level `//!` documentation on `src/model/mod.rs` describing all 11 submodules
+- GitHub Actions CI workflow: formatting, clippy (default + git features), test matrix (unit, unit+git, integration, doc), coverage with 75% threshold
+- 6 new `module_inference` edge case tests: empty inputs, deep nesting, import-only files, self-dependency exclusion, dedup, root module
+- 6 new `diff` edge case tests: dependency add/remove, simultaneous changes, auth risk, removed PII risk, empty models
+- `resolution_method_distribution: HashMap<String, usize>` on `CodeModelStats` — breakdown of references by resolution method (import_based, same_file, global_unique, global_ambiguous, unresolved) for diagnosing resolution quality
+- `ResolutionMethod::as_str()` method — returns snake_case label consistent with serde serialization
+- Resolution method distribution displayed in `analyze_project` example output under avg confidence line
+- 3 new unit tests: `resolution_method_as_str_returns_snake_case`, `total_imports_counts_import_references`, `resolution_method_distribution_is_populated`
+- `ResolutionMethod::GlobalSameDir` variant — disambiguates same-directory preference (0.60 confidence) from generic `GlobalAmbiguous` (0.40), giving the resolution method distribution finer granularity
+- `ResolutionMethod::External` variant — classifies non-project imports (stdlib, third-party packages) as external (0.60 confidence) instead of lumping them with truly `Unresolved` (0.0)
+- Python import extraction in `python.rs`: `import os`, `import torch.nn as nn`, `from fastapi import FastAPI, Depends`, `from . import views`, `from ..utils import helper`, `from os.path import *` — covers all 4 Python import forms (simple, dotted, from-import, wildcard)
+- Python relative import normalization in `import_resolver.rs`: converts Python dot-prefix (`.`, `..utils`, `...core`) to JS-style paths (`./`, `../utils`, `../../core`) for unified resolution
+- `LanguageBehavior::is_stdlib_module()` trait method — per-language standard library classification, implemented for Python with 130 CPython 3.12 modules
+- `python_imports/` integration test fixture (5 Python files) exercising stdlib, third-party, and relative import patterns end-to-end
+- 4 new Python import integration tests: import extraction, stdlib-as-External classification, relative import resolution, resolution method distribution
+- 11 new `normalize_python_relative` unit tests + 2 end-to-end resolution tests in `import_resolver.rs`
+- 3 new `is_stdlib_module` tests in `language_behavior.rs`: Python stdlib, third-party rejection, cross-language default
+- 9 new Python import extraction unit tests in `python.rs`: simple, dotted, aliased, from-import, relative, wildcard, multi-file
+
+### Fixed
+- `total_imports` stat now counts `ReferenceKind::Import` references instead of `ImportInfo` entries — previously only the TypeScript extractor populated `ImportInfo`, causing `total_imports=0` for all other languages despite having import references in the graph
+- Relative import resolution now works with absolute file paths — `resolve_relative_path()` tries both the normalized (absolute) and project-relative candidate paths, fixing a bug where resolution always failed in integration/production mode because `file_symbols` had absolute keys
+- Removed redundant stable sort on 1.28M+ references in `resolve_all_references()` — the caller (`build_component`) already applies the final sort, saving ~2-3 seconds on large projects like PyTorch
+- Python route extraction: `@patch("module.path")` from `unittest.mock` no longer detected as HTTP PATCH routes — added object whitelist (`app`, `router`, `api`, etc.) and path validation (must start with `/`)
+- Python Django extraction: `path("bin/script.py")` utility calls no longer detected as Django URL patterns — added minimum 2 positional arguments check and file extension rejection
+- `analyze_project` example for analyzing any project directory (`cargo run --example analyze_project -- /path/to/project`)
+- 4 new regression tests for Python false positive prevention (mock.patch, bare path(), non-router decorators, Django with view handler)
 
 ### Changed
+- `analyze_project` example: renamed "File Roles" section header to "Analyzed File Roles" — clarifies that only files passing `detect_language()` (16 programming languages) are included, not all project files
+- Refactored `graph.rs` (1,989 lines) into `graph/` submodule with `types.rs`, `construction.rs`, `analysis.rs` — improved maintainability with zero behavioral changes, all import paths preserved via re-exports
 - `CodeModel` now includes `file_tree: Option<FileTree>` field — built automatically during `CodeModelBuilder::build()`
 - `CodeModelBuilder` accepts optional `WorkspaceLayout` via `set_workspace_layout()` for component-aware file tree construction
 - `CodeModelBuilder` refactored from flat `HashMap<PathBuf, FileContribution>` to per-component `HashMap<String, ComponentState>` — single-project output is structurally identical (backward compatible)

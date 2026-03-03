@@ -182,6 +182,23 @@ impl AnalysisPipeline {
     ///
     /// Runs: degree centrality → entry point detection → process flow
     /// tracing → cycle analysis.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::PathBuf;
+    /// use intently_core::{IntentlyEngine, KnowledgeGraph, AnalysisPipeline};
+    ///
+    /// let mut engine = IntentlyEngine::new(PathBuf::from("/path/to/project"));
+    /// let result = engine.full_analysis().expect("extraction failed");
+    /// let graph = KnowledgeGraph::from_code_model(&result.model);
+    ///
+    /// // Run the standard 4-pass analysis pipeline
+    /// let context = AnalysisPipeline::standard().run(&graph);
+    /// println!("Entry points: {}", context.entry_points.len());
+    /// println!("Process flows: {}", context.process_flows.len());
+    /// println!("Cycles: {}", context.cycles.len());
+    /// ```
     pub fn standard() -> Self {
         Self::new()
             .with_analyzer(DegreeCentralityAnalyzer)

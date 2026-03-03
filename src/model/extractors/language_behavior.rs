@@ -112,6 +112,19 @@ pub trait LanguageBehavior: Send + Sync {
     fn is_test_symbol(&self, _node: &Node, _source: &str, _symbol_name: &str) -> bool {
         false
     }
+
+    /// Check if a module name belongs to this language's standard library.
+    ///
+    /// Used by downstream analysis to differentiate "known stdlib" external
+    /// imports from "unknown third-party" external imports. The check uses
+    /// the top-level module name (e.g., `os` from `os.path`, `collections`
+    /// from `collections.abc`).
+    ///
+    /// Returns `false` by default — only languages with well-defined stdlib
+    /// boundaries override this (currently Python).
+    fn is_stdlib_module(&self, _module_name: &str) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +169,146 @@ impl LanguageBehavior for TypeScriptBehavior {
     }
 }
 
+/// Python 3.12 standard library top-level module names.
+///
+/// Comprehensive list covering the most commonly imported stdlib modules.
+/// Used by [`PythonBehavior::is_stdlib_module`] to distinguish stdlib from
+/// third-party imports. Sorted alphabetically for maintainability.
+///
+/// Source: <https://docs.python.org/3.12/py-modindex.html>
+const PYTHON_STDLIB_MODULES: &[&str] = &[
+    "abc",
+    "argparse",
+    "ast",
+    "asyncio",
+    "atexit",
+    "base64",
+    "bisect",
+    "builtins",
+    "calendar",
+    "cmath",
+    "codecs",
+    "collections",
+    "colorsys",
+    "concurrent",
+    "configparser",
+    "contextlib",
+    "contextvars",
+    "copy",
+    "csv",
+    "ctypes",
+    "dataclasses",
+    "datetime",
+    "decimal",
+    "difflib",
+    "dis",
+    "email",
+    "enum",
+    "errno",
+    "faulthandler",
+    "fcntl",
+    "fileinput",
+    "fnmatch",
+    "fractions",
+    "ftplib",
+    "functools",
+    "gc",
+    "getpass",
+    "gettext",
+    "glob",
+    "gzip",
+    "hashlib",
+    "heapq",
+    "hmac",
+    "html",
+    "http",
+    "importlib",
+    "inspect",
+    "io",
+    "ipaddress",
+    "itertools",
+    "json",
+    "keyword",
+    "linecache",
+    "locale",
+    "logging",
+    "lzma",
+    "marshal",
+    "math",
+    "mimetypes",
+    "mmap",
+    "multiprocessing",
+    "numbers",
+    "operator",
+    "os",
+    "pathlib",
+    "pdb",
+    "pickle",
+    "pkgutil",
+    "platform",
+    "plistlib",
+    "pprint",
+    "profile",
+    "pstats",
+    "queue",
+    "random",
+    "re",
+    "readline",
+    "reprlib",
+    "resource",
+    "runpy",
+    "sched",
+    "secrets",
+    "select",
+    "selectors",
+    "shelve",
+    "shlex",
+    "shutil",
+    "signal",
+    "site",
+    "smtplib",
+    "socket",
+    "sqlite3",
+    "ssl",
+    "stat",
+    "statistics",
+    "string",
+    "struct",
+    "subprocess",
+    "sys",
+    "sysconfig",
+    "syslog",
+    "tempfile",
+    "termios",
+    "textwrap",
+    "threading",
+    "time",
+    "timeit",
+    "token",
+    "tokenize",
+    "tomllib",
+    "traceback",
+    "tracemalloc",
+    "tty",
+    "turtle",
+    "types",
+    "typing",
+    "unicodedata",
+    "unittest",
+    "urllib",
+    "uuid",
+    "venv",
+    "warnings",
+    "wave",
+    "weakref",
+    "webbrowser",
+    "xml",
+    "xmlrpc",
+    "zipfile",
+    "zipimport",
+    "zlib",
+];
+
 /// Behavior for Python.
 pub(crate) struct PythonBehavior;
 
@@ -195,6 +348,15 @@ impl LanguageBehavior for PythonBehavior {
     /// Python: `def test_*` or methods inside `unittest.TestCase` subclasses.
     fn is_test_symbol(&self, _node: &Node, _source: &str, symbol_name: &str) -> bool {
         symbol_name.starts_with("test_") || symbol_name.starts_with("test")
+    }
+
+    /// Python 3.x standard library modules.
+    ///
+    /// Matches the top-level module name against the CPython 3.12 stdlib.
+    /// For dotted imports like `os.path`, the caller should extract the
+    /// first segment (`os`) before calling this method.
+    fn is_stdlib_module(&self, module_name: &str) -> bool {
+        PYTHON_STDLIB_MODULES.contains(&module_name)
     }
 }
 
@@ -1261,5 +1423,38 @@ mod tests {
             truncate_at_char("def foo()  :", ':'),
             Some("def foo()".to_string())
         );
+    }
+
+    // =======================================================================
+    // is_stdlib_module
+    // =======================================================================
+
+    #[test]
+    fn python_recognizes_stdlib_modules() {
+        assert!(PythonBehavior.is_stdlib_module("os"));
+        assert!(PythonBehavior.is_stdlib_module("sys"));
+        assert!(PythonBehavior.is_stdlib_module("json"));
+        assert!(PythonBehavior.is_stdlib_module("collections"));
+        assert!(PythonBehavior.is_stdlib_module("asyncio"));
+        assert!(PythonBehavior.is_stdlib_module("typing"));
+        assert!(PythonBehavior.is_stdlib_module("pathlib"));
+    }
+
+    #[test]
+    fn python_rejects_third_party_modules() {
+        assert!(!PythonBehavior.is_stdlib_module("fastapi"));
+        assert!(!PythonBehavior.is_stdlib_module("torch"));
+        assert!(!PythonBehavior.is_stdlib_module("numpy"));
+        assert!(!PythonBehavior.is_stdlib_module("requests"));
+        assert!(!PythonBehavior.is_stdlib_module("pydantic"));
+        assert!(!PythonBehavior.is_stdlib_module("django"));
+    }
+
+    #[test]
+    fn non_python_languages_return_false_for_stdlib() {
+        assert!(!TypeScriptBehavior.is_stdlib_module("os"));
+        assert!(!JavaBehavior.is_stdlib_module("java"));
+        assert!(!GoBehavior.is_stdlib_module("fmt"));
+        assert!(!GenericBehavior.is_stdlib_module("std"));
     }
 }

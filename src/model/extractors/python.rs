@@ -48,6 +48,12 @@ fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &m
             try_extract_http_call(node, source, file_path, extraction);
             common::try_extract_log_sink(node, source, file_path, extraction);
         }
+        "import_statement" => {
+            try_extract_import_statement(node, source, extraction);
+        }
+        "import_from_statement" => {
+            try_extract_import_from_statement(node, source, extraction);
+        }
         _ => {}
     }
 
@@ -57,6 +63,156 @@ fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &m
             extract_recursive(&child, source, file_path, extraction);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Import extraction
+// ---------------------------------------------------------------------------
+
+/// Extract import info from `import os` or `import torch.nn as nn`.
+///
+/// Python's `import_statement` AST:
+/// ```text
+/// (import_statement
+///   name: (dotted_name)          ; "os" or "torch.nn"
+///   alias: (aliased_import       ; optional "as nn"
+///     name: (dotted_name)
+///     alias: (identifier)))
+/// ```
+fn try_extract_import_statement(node: &Node, source: &str, extraction: &mut FileExtraction) {
+    let line = node.start_position().row + 1;
+
+    for i in 0..node.named_child_count() {
+        let child = match node.named_child(i as u32) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        let module_name = match child.kind() {
+            "dotted_name" | "identifier" => node_text_ref(&child, source).to_string(),
+            "aliased_import" => {
+                // `import torch.nn as nn` — the dotted_name is the first named child
+                match child.named_child(0) {
+                    Some(name_node) => node_text_ref(&name_node, source).to_string(),
+                    None => continue,
+                }
+            }
+            _ => continue,
+        };
+
+        if module_name.is_empty() {
+            continue;
+        }
+
+        // `import torch.nn` → source = "torch.nn", specifier = "torch.nn"
+        // The alias (as nn) is just a local name, the source is the module path.
+        extraction.imports.push(ImportInfo {
+            source: module_name.clone(),
+            specifiers: vec![module_name],
+            line,
+        });
+    }
+}
+
+/// Extract import info from `from fastapi import FastAPI, Depends`.
+///
+/// Python's `import_from_statement` AST:
+/// ```text
+/// (import_from_statement
+///   module_name: (dotted_name)   ; "fastapi" or (relative_import)
+///   name: (dotted_name)          ; "FastAPI", repeated for each specifier
+///   ...)
+/// ```
+///
+/// Handles:
+/// - Absolute: `from fastapi import FastAPI` → source "fastapi"
+/// - Relative: `from . import views` → source "."
+/// - Relative with module: `from ..utils import helper` → source "..utils"
+/// - Wildcard: `from os.path import *` → source "os.path", specifier "*"
+fn try_extract_import_from_statement(node: &Node, source: &str, extraction: &mut FileExtraction) {
+    let line = node.start_position().row + 1;
+
+    // Build the module source from the node text.
+    // The module_name field gives the module after `from`.
+    // For relative imports, we also need to capture the dots.
+    let module_source = build_python_import_source(node, source);
+    if module_source.is_empty() {
+        return;
+    }
+
+    // Collect imported specifiers
+    let mut specifiers = Vec::new();
+    for i in 0..node.named_child_count() {
+        let child = match node.named_child(i as u32) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        match child.kind() {
+            "dotted_name" | "identifier" => {
+                // Skip the module_name — it's the source, not a specifier.
+                // The module_name is typically the first named child.
+                // Specifiers come after the "import" keyword.
+                // We use a heuristic: if this child's start is after the "import" keyword, it's a specifier.
+                let text = node_text_ref(&child, source);
+                if text != module_source && !module_source.ends_with(text) {
+                    specifiers.push(text.to_string());
+                }
+            }
+            "aliased_import" => {
+                // `from x import Foo as Bar` — take the original name
+                if let Some(name_node) = child.named_child(0) {
+                    specifiers.push(node_text_ref(&name_node, source).to_string());
+                }
+            }
+            "wildcard_import" => {
+                specifiers.push("*".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    // If no specifiers were found (shouldn't happen in valid Python), use the module as specifier
+    if specifiers.is_empty() {
+        specifiers.push(module_source.clone());
+    }
+
+    extraction.imports.push(ImportInfo {
+        source: module_source,
+        specifiers,
+        line,
+    });
+}
+
+/// Build the module source string for a Python `import_from_statement`.
+///
+/// Handles:
+/// - `from fastapi import X` → "fastapi"
+/// - `from . import X` → "."
+/// - `from ..utils import X` → "..utils"
+/// - `from torch.nn.modules import X` → "torch.nn.modules"
+fn build_python_import_source(node: &Node, source: &str) -> String {
+    // Walk through children to find the module part (between "from" and "import").
+    // For relative imports, we need to capture the dots + optional module name.
+    let full_text = node_text_ref(node, source);
+
+    // Find "from " and "import " boundaries
+    let from_end = match full_text.find("from") {
+        Some(pos) => pos + 4,
+        None => return String::new(),
+    };
+    let import_start = match full_text.find(" import ") {
+        Some(pos) => pos,
+        None => return String::new(),
+    };
+
+    if import_start <= from_end {
+        return String::new();
+    }
+
+    // The module part is between "from " and " import "
+    let module_part = full_text[from_end..import_start].trim();
+    module_part.to_string()
 }
 
 /// Try to extract a route from a decorated function definition.
@@ -129,6 +285,11 @@ fn try_extract_decorated_route(
 /// Returns `Some((method, path))` for route decorators like:
 /// - `@app.get("/users")` → (Get, "/users")
 /// - `@app.route("/items")` → (All, "/items")
+///
+/// Filters out false positives from non-router decorators such as
+/// `@patch("module.path")` from `unittest.mock` by:
+/// 1. Requiring the object to be a known router/app variable name
+/// 2. Requiring the path argument to start with `/`
 fn try_parse_route_decorator(expr: &Node, source: &str) -> Option<(HttpMethod, String)> {
     // Route decorators are always calls: @app.get("/path")
     if expr.kind() != "call" {
@@ -139,6 +300,14 @@ fn try_parse_route_decorator(expr: &Node, source: &str) -> Option<(HttpMethod, S
 
     // Must be an attribute access: app.get, router.post, etc.
     if function.kind() != "attribute" {
+        return None;
+    }
+
+    // Validate the object is a known router/app variable.
+    // Without this, @patch("...") from unittest.mock matches as HTTP PATCH.
+    let object = function.child_by_field_name("object")?;
+    let obj_text = node_text_ref(&object, source);
+    if !is_route_object(obj_text) {
         return None;
     }
 
@@ -156,7 +325,39 @@ fn try_parse_route_decorator(expr: &Node, source: &str) -> Option<(HttpMethod, S
     let args = expr.child_by_field_name("arguments")?;
     let first_arg = find_first_string_arg(&args, source)?;
 
+    // Route paths must start with "/" — dotted module paths like
+    // "torch._C._func" are mock targets, not HTTP endpoints.
+    if !first_arg.starts_with('/') {
+        return None;
+    }
+
     Some((http_method, first_arg))
+}
+
+/// Known variable names for Python web framework router/app objects.
+///
+/// Covers FastAPI, Flask, and common naming conventions.
+/// Intentionally conservative — better to miss an exotic alias than
+/// to produce false positives from unrelated libraries.
+fn is_route_object(name: &str) -> bool {
+    matches!(
+        name,
+        "app" | "router" | "api" | "blueprint" | "bp" | "api_router" | "web" | "route"
+    )
+}
+
+/// Check if a string looks like a file system path rather than a URL pattern.
+///
+/// File paths contain extensions like `.py`, `.sh`, `.js` etc.
+/// Django URL patterns use segments like `users/`, `<int:id>/`, `{param}`.
+fn looks_like_file_path(s: &str) -> bool {
+    let extensions = [
+        ".py", ".sh", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".php",
+        ".c", ".cpp", ".h", ".hpp", ".swift", ".kt", ".scala", ".sql", ".html", ".css", ".json",
+        ".yaml", ".yml", ".toml", ".xml", ".txt", ".md", ".cfg", ".ini", ".conf", ".log", ".csv",
+    ];
+    let lower = s.to_lowercase();
+    extensions.iter().any(|ext| lower.ends_with(ext))
 }
 
 /// Parse a decorator expression to detect auth indicators.
@@ -188,6 +389,13 @@ fn try_parse_auth_decorator(expr: &Node, source: &str) -> Option<AuthKind> {
 }
 
 /// Try to extract a Django URL pattern from `path("url/", view)`.
+///
+/// Requires at least two positional arguments (URL pattern + view) to
+/// distinguish Django's `path("users/", views.list)` from unrelated
+/// functions like `path("bin/script.py")`.
+///
+/// Also rejects paths containing file extensions (`.py`, `.sh`, etc.)
+/// which are file system paths, not URL patterns.
 fn try_extract_django_path(
     node: &Node,
     source: &str,
@@ -214,8 +422,23 @@ fn try_extract_django_path(
         None => return,
     };
 
+    // Django's path() requires at least 2 positional args: URL pattern + view.
+    // A bare `path("something")` with one arg is likely a file path helper.
+    let positional_count = (0..args.named_child_count())
+        .filter_map(|i| args.named_child(i as u32))
+        .filter(|c| c.kind() != "keyword_argument")
+        .count();
+    if positional_count < 2 {
+        return;
+    }
+
     let url_path = match find_first_string_arg(&args, source) {
         Some(p) => {
+            // Reject file system paths: strings containing file extensions
+            // like ".py", ".sh", ".js" are not Django URL patterns.
+            if looks_like_file_path(&p) {
+                return;
+            }
             // Django paths don't start with / — normalize
             if p.starts_with('/') {
                 p
@@ -328,6 +551,85 @@ mod tests {
         let parsed = parser::parse_source(&path, source, SupportedLanguage::Python, None).unwrap();
         extract(&path, source, &parsed.tree, SupportedLanguage::Python)
     }
+
+    // ── Import extraction tests ───────────────────────────────────
+
+    #[test]
+    fn extracts_simple_import() {
+        let ext = extract_py("import os\n");
+        assert_eq!(ext.imports.len(), 1);
+        assert_eq!(ext.imports[0].source, "os");
+    }
+
+    #[test]
+    fn extracts_dotted_import() {
+        let ext = extract_py("import torch.nn\n");
+        assert_eq!(ext.imports.len(), 1);
+        assert_eq!(ext.imports[0].source, "torch.nn");
+    }
+
+    #[test]
+    fn extracts_aliased_import() {
+        let ext = extract_py("import torch.nn as nn\n");
+        assert_eq!(ext.imports.len(), 1);
+        assert_eq!(ext.imports[0].source, "torch.nn");
+    }
+
+    #[test]
+    fn extracts_from_import_with_specifiers() {
+        let ext = extract_py("from fastapi import FastAPI, Depends\n");
+        assert_eq!(ext.imports.len(), 1);
+        assert_eq!(ext.imports[0].source, "fastapi");
+        assert!(ext.imports[0].specifiers.contains(&"FastAPI".to_string()));
+        assert!(ext.imports[0].specifiers.contains(&"Depends".to_string()));
+    }
+
+    #[test]
+    fn extracts_relative_import_dot() {
+        let ext = extract_py("from . import views\n");
+        assert_eq!(ext.imports.len(), 1);
+        assert_eq!(ext.imports[0].source, ".");
+        assert!(ext.imports[0].specifiers.contains(&"views".to_string()));
+    }
+
+    #[test]
+    fn extracts_relative_import_double_dot() {
+        let ext = extract_py("from ..utils import helper\n");
+        assert_eq!(ext.imports.len(), 1);
+        assert_eq!(ext.imports[0].source, "..utils");
+        assert!(ext.imports[0].specifiers.contains(&"helper".to_string()));
+    }
+
+    #[test]
+    fn extracts_from_import_wildcard() {
+        let ext = extract_py("from os.path import *\n");
+        assert_eq!(ext.imports.len(), 1);
+        assert_eq!(ext.imports[0].source, "os.path");
+        assert!(ext.imports[0].specifiers.contains(&"*".to_string()));
+    }
+
+    #[test]
+    fn extracts_multiple_imports_in_file() {
+        let ext = extract_py(
+            r#"
+import os
+import sys
+from fastapi import FastAPI
+from . import views
+"#,
+        );
+        assert_eq!(ext.imports.len(), 4);
+    }
+
+    #[test]
+    fn extracts_from_import_with_alias() {
+        let ext = extract_py("from torch import Tensor as T\n");
+        assert_eq!(ext.imports.len(), 1);
+        assert_eq!(ext.imports[0].source, "torch");
+        assert!(ext.imports[0].specifiers.contains(&"Tensor".to_string()));
+    }
+
+    // ── Route extraction tests ──────────────────────────────────
 
     #[test]
     fn extracts_fastapi_get_route() {
@@ -504,6 +806,82 @@ def delete_user(id: int):
         assert!(ext.interfaces[0].auth.is_none());
         assert!(ext.interfaces[1].auth.is_some());
         assert!(ext.interfaces[2].auth.is_some());
+    }
+
+    #[test]
+    fn unittest_mock_patch_not_detected_as_route() {
+        let ext = extract_py(
+            r#"
+from unittest.mock import patch
+
+@patch("torch._C._get_default_tensor_type")
+def test_default_type():
+    pass
+
+@patch("module.config.use_fp64")
+def test_fp64():
+    pass
+"#,
+        );
+        assert!(
+            ext.interfaces.is_empty(),
+            "unittest.mock.patch should not produce HTTP routes, got: {:?}",
+            ext.interfaces.iter().map(|i| &i.path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bare_path_call_not_detected_as_django_route() {
+        let ext = extract_py(
+            r#"
+script = path("bin/test_script.py")
+config = path("config/settings.yaml")
+"#,
+        );
+        assert!(
+            ext.interfaces.is_empty(),
+            "path() with single arg or file extension should not produce routes, got: {:?}",
+            ext.interfaces.iter().map(|i| &i.path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn non_router_object_decorator_not_detected_as_route() {
+        let ext = extract_py(
+            r#"
+@config.patch("/some/setting")
+def update_setting():
+    pass
+
+@mock.get("/fake/endpoint")
+def test_something():
+    pass
+"#,
+        );
+        assert!(
+            ext.interfaces.is_empty(),
+            "decorators on unknown objects should not produce routes, got: {:?}",
+            ext.interfaces.iter().map(|i| &i.path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn django_path_with_view_handler_still_works() {
+        let ext = extract_py(
+            r#"
+from django.urls import path
+urlpatterns = [
+    path('users/', views.user_list, name='user-list'),
+    path('users/<int:pk>/', views.user_detail, name='user-detail'),
+    path('health/', views.health_check),
+]
+"#,
+        );
+        assert_eq!(
+            ext.interfaces.len(),
+            3,
+            "Django path() with view handler arg should still extract"
+        );
     }
 
     #[test]

@@ -337,4 +337,155 @@ mod tests {
         assert_eq!(module.files.len(), 2);
         assert_eq!(module.exported_symbols, vec!["LoadConfig", "Main"]);
     }
+
+    #[test]
+    fn empty_inputs_produce_no_boundaries() {
+        let root = Path::new("/project");
+        let file_symbols: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
+        let file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();
+
+        let boundaries = infer_module_boundaries(&file_symbols, &file_imports, root);
+
+        assert!(boundaries.is_empty());
+    }
+
+    #[test]
+    fn deeply_nested_files_group_by_first_two_components() {
+        let root = Path::new("/project");
+
+        let mut file_symbols: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
+        file_symbols.insert(
+            PathBuf::from("/project/src/users/controllers/auth.ts"),
+            vec![public_symbol(
+                "authController",
+                "/project/src/users/controllers/auth.ts",
+            )],
+        );
+        file_symbols.insert(
+            PathBuf::from("/project/src/users/services/auth_service.ts"),
+            vec![public_symbol(
+                "authService",
+                "/project/src/users/services/auth_service.ts",
+            )],
+        );
+
+        let file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();
+
+        let boundaries = infer_module_boundaries(&file_symbols, &file_imports, root);
+
+        assert_eq!(boundaries.len(), 1);
+        let module = &boundaries[0];
+        assert_eq!(module.name, "src/users");
+        assert_eq!(module.files.len(), 2);
+    }
+
+    #[test]
+    fn file_only_in_imports_still_appears_in_module() {
+        let root = Path::new("/project");
+
+        let file_symbols: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
+
+        let mut file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();
+        file_imports.insert(
+            PathBuf::from("/project/src/utils/helpers.ts"),
+            vec![import("lodash")],
+        );
+
+        let boundaries = infer_module_boundaries(&file_symbols, &file_imports, root);
+
+        assert_eq!(boundaries.len(), 1);
+        let module = &boundaries[0];
+        assert_eq!(module.name, "src/utils");
+        assert!(module
+            .files
+            .contains(&PathBuf::from("/project/src/utils/helpers.ts")));
+    }
+
+    #[test]
+    fn self_dependency_excluded_from_depends_on() {
+        let root = Path::new("/project");
+
+        let mut file_symbols: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
+        file_symbols.insert(
+            PathBuf::from("/project/src/users/handler.ts"),
+            vec![public_symbol("handleUser", "/project/src/users/handler.ts")],
+        );
+        file_symbols.insert(
+            PathBuf::from("/project/src/users/service.ts"),
+            vec![public_symbol(
+                "UserService",
+                "/project/src/users/service.ts",
+            )],
+        );
+
+        let mut file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();
+        // Import resolves to the same module (src/users).
+        file_imports.insert(
+            PathBuf::from("/project/src/users/handler.ts"),
+            vec![import("./service")],
+        );
+
+        let boundaries = infer_module_boundaries(&file_symbols, &file_imports, root);
+
+        let users_module = boundaries.iter().find(|m| m.name == "src/users").unwrap();
+        assert!(
+            users_module.depends_on.is_empty(),
+            "module should not list itself as a dependency"
+        );
+    }
+
+    #[test]
+    fn multiple_imports_to_same_module_deduped() {
+        let root = Path::new("/project");
+
+        let mut file_symbols: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
+        file_symbols.insert(
+            PathBuf::from("/project/src/users/handler.ts"),
+            vec![public_symbol("handleUser", "/project/src/users/handler.ts")],
+        );
+        file_symbols.insert(
+            PathBuf::from("/project/src/orders/service.ts"),
+            vec![public_symbol(
+                "OrderService",
+                "/project/src/orders/service.ts",
+            )],
+        );
+
+        let mut file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();
+        // Two separate imports both pointing into src/orders.
+        file_imports.insert(
+            PathBuf::from("/project/src/users/handler.ts"),
+            vec![import("../orders/service"), import("../orders/repository")],
+        );
+
+        let boundaries = infer_module_boundaries(&file_symbols, &file_imports, root);
+
+        let users_module = boundaries.iter().find(|m| m.name == "src/users").unwrap();
+        assert_eq!(
+            users_module.depends_on,
+            vec!["src/orders"],
+            "duplicate dependency on the same module should appear only once"
+        );
+    }
+
+    #[test]
+    fn single_root_file_goes_to_root_module() {
+        let root = Path::new("/project");
+
+        let mut file_symbols: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
+        file_symbols.insert(
+            PathBuf::from("/project/index.ts"),
+            vec![public_symbol("main", "/project/index.ts")],
+        );
+
+        let file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();
+
+        let boundaries = infer_module_boundaries(&file_symbols, &file_imports, root);
+
+        assert_eq!(boundaries.len(), 1);
+        let module = &boundaries[0];
+        assert_eq!(module.name, "__root__");
+        assert_eq!(module.files.len(), 1);
+        assert!(module.files.contains(&PathBuf::from("/project/index.ts")));
+    }
 }

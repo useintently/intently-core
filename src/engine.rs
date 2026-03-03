@@ -112,6 +112,21 @@ impl IntentlyEngine {
     ///
     /// Automatically detects workspace layouts (pnpm, npm, Cargo, Go, uv)
     /// to enable per-package component extraction.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::PathBuf;
+    /// use intently_core::IntentlyEngine;
+    ///
+    /// let engine = IntentlyEngine::new(PathBuf::from("/path/to/project"));
+    ///
+    /// // Access the detected workspace layout (if any)
+    /// if let Some(layout) = engine.workspace_layout() {
+    ///     println!("Detected {} workspace with {} packages",
+    ///         layout.kind, layout.packages.len());
+    /// }
+    /// ```
     pub fn new(project_root: PathBuf) -> Self {
         let project_name = project_root
             .file_name()
@@ -149,6 +164,25 @@ impl IntentlyEngine {
     /// Files are processed in chunks of [`CHUNK_SIZE`] to bound peak memory.
     /// Each chunk is extracted in parallel via rayon, then drained into the
     /// sequential caches before the next chunk starts.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::PathBuf;
+    /// use intently_core::IntentlyEngine;
+    ///
+    /// let mut engine = IntentlyEngine::new(PathBuf::from("/path/to/project"));
+    /// let result = engine.full_analysis().expect("extraction failed");
+    ///
+    /// println!("Analyzed {} files", result.files_analyzed);
+    /// println!("Found {} components", result.model.components.len());
+    /// println!("Pipeline took {}ms", result.timing.total_ms);
+    ///
+    /// // Access the knowledge graph for structural analysis
+    /// if let Some(stats) = &result.graph_stats {
+    ///     println!("Graph: {} nodes, {} edges", stats.total_nodes, stats.total_edges);
+    /// }
+    /// ```
     #[instrument(skip(self), fields(project = %self.project_name))]
     pub fn full_analysis(&mut self) -> Result<ExtractionResult> {
         let start = Instant::now();

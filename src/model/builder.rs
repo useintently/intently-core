@@ -14,6 +14,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
+
 use super::file_tree::{self, FileMeta};
 use super::types::*;
 use crate::error::Result;
@@ -240,6 +242,7 @@ impl CodeModelBuilder {
         let mut total_estimated_tokens: u64 = 0;
         let mut total_test_symbols: usize = 0;
         let mut total_env_dependencies: usize = 0;
+        let mut resolution_method_dist: HashMap<String, usize> = HashMap::new();
 
         // Sort component names for deterministic output
         let mut component_names: Vec<&String> = self.components.keys().collect();
@@ -255,7 +258,11 @@ impl CodeModelBuilder {
             total_dependencies += component.dependencies.len();
             total_sinks += component.sinks.len();
             total_symbols += component.symbols.len();
-            total_imports += component.imports.len();
+            total_imports += component
+                .references
+                .iter()
+                .filter(|r| r.reference_kind == ReferenceKind::Import)
+                .count();
             total_references += component.references.len();
             total_data_models += component.data_models.len();
             total_modules += component.module_boundaries.len();
@@ -272,6 +279,11 @@ impl CodeModelBuilder {
                 .map(|r| r.confidence)
                 .sum::<f64>();
             total_ref_count += component.references.len();
+            for r in &component.references {
+                *resolution_method_dist
+                    .entry(r.resolution_method.as_str().to_string())
+                    .or_insert(0) += 1;
+            }
 
             for contrib in state.contributions.values() {
                 let role_key = contrib.file_role.as_str().to_string();
@@ -332,6 +344,7 @@ impl CodeModelBuilder {
             total_directories,
             total_test_symbols,
             total_env_dependencies,
+            resolution_method_distribution: resolution_method_dist,
             git_stats: None, // Populated by engine after git metadata merge
         };
 
@@ -350,19 +363,49 @@ impl CodeModelBuilder {
     /// the component's own root path — critical for monorepos where each
     /// package has its own relative import context.
     fn build_component(&self, name: &str, state: &ComponentState) -> Component {
-        let mut interfaces = Vec::new();
-        let mut dependencies = Vec::new();
-        let mut sinks = Vec::new();
-        let mut symbols = Vec::new();
-        let mut imports = Vec::new();
-        let mut references = Vec::new();
-        let mut data_models = Vec::new();
-        let mut env_dependencies = Vec::new();
+        // Pre-compute total sizes to avoid repeated Vec reallocations.
+        // With PyTorch-scale projects (144K symbols, 1.28M refs), this
+        // eliminates ~20 reallocation+copy cycles per vector.
+        let (
+            total_interfaces,
+            total_deps,
+            total_sinks,
+            total_symbols,
+            total_imports,
+            total_refs,
+            total_data_models,
+            total_env_deps,
+        ) = state.contributions.values().fold(
+            (0, 0, 0, 0, 0, 0, 0, 0),
+            |(i, d, s, sy, im, r, dm, e), c| {
+                (
+                    i + c.interfaces.len(),
+                    d + c.dependencies.len(),
+                    s + c.sinks.len(),
+                    sy + c.symbols.len(),
+                    im + c.imports.len(),
+                    r + c.references.len(),
+                    dm + c.data_models.len(),
+                    e + c.env_dependencies.len(),
+                )
+            },
+        );
+
+        let mut interfaces = Vec::with_capacity(total_interfaces);
+        let mut dependencies = Vec::with_capacity(total_deps);
+        let mut sinks = Vec::with_capacity(total_sinks);
+        let mut symbols = Vec::with_capacity(total_symbols);
+        let mut imports = Vec::with_capacity(total_imports);
+        let mut references = Vec::with_capacity(total_refs);
+        let mut data_models = Vec::with_capacity(total_data_models);
+        let mut env_dependencies = Vec::with_capacity(total_env_deps);
         let mut lang_counts: HashMap<SupportedLanguage, usize> = HashMap::new();
 
         // Build per-file maps for post-processing
-        let mut file_imports: HashMap<PathBuf, Vec<ImportInfo>> = HashMap::new();
-        let mut file_symbols: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
+        let mut file_imports: HashMap<PathBuf, Vec<ImportInfo>> =
+            HashMap::with_capacity(state.contributions.len());
+        let mut file_symbols: HashMap<PathBuf, Vec<Symbol>> =
+            HashMap::with_capacity(state.contributions.len());
 
         for (path, contribution) in &state.contributions {
             interfaces.extend(contribution.interfaces.iter().cloned());
@@ -414,22 +457,31 @@ impl CodeModelBuilder {
             &state.root,
         );
 
-        // Sort for deterministic output
-        interfaces.sort_by(|a, b| {
+        // Sort for deterministic output.
+        // Use parallel unstable sort for large collections (references, symbols)
+        // to exploit multi-core. Unstable sort avoids allocation overhead and is
+        // faster for types that don't need stable ordering.
+        interfaces.sort_unstable_by(|a, b| {
             (&a.path, &a.method.to_string()).cmp(&(&b.path, &b.method.to_string()))
         });
-        dependencies.sort_by(|a, b| a.target.cmp(&b.target));
-        sinks.sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
-        symbols
-            .sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
-        imports.sort_by(|a, b| (&a.source, a.line).cmp(&(&b.source, b.line)));
-        references
-            .sort_by(|a, b| (&a.source_file, a.source_line).cmp(&(&b.source_file, b.source_line)));
-        data_models
-            .sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
-
-        env_dependencies
-            .sort_by(|a, b| (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line)));
+        dependencies.sort_unstable_by(|a, b| a.target.cmp(&b.target));
+        sinks.sort_unstable_by(|a, b| {
+            (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line))
+        });
+        imports.sort_unstable_by(|a, b| (&a.source, a.line).cmp(&(&b.source, b.line)));
+        env_dependencies.sort_unstable_by(|a, b| {
+            (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line))
+        });
+        data_models.sort_unstable_by(|a, b| {
+            (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line))
+        });
+        // Parallel sort for the two largest collections
+        symbols.par_sort_unstable_by(|a, b| {
+            (&a.anchor.file, a.anchor.line).cmp(&(&b.anchor.file, b.anchor.line))
+        });
+        references.par_sort_unstable_by(|a, b| {
+            (&a.source_file, a.source_line).cmp(&(&b.source_file, b.source_line))
+        });
 
         let language = dominant_language_from_counts(&lang_counts);
 
@@ -1531,5 +1583,141 @@ mod tests {
                 "impl→impl reference should NOT be tagged"
             );
         }
+    }
+
+    #[test]
+    fn total_imports_counts_import_references() {
+        // ImportInfo entries are resolved into ReferenceKind::Import references
+        // by the import resolver during build. total_imports should count those
+        // Import references, not the raw ImportInfo entries.
+        let ext = FileExtraction {
+            file: PathBuf::from("src/app.ts"),
+            language: SupportedLanguage::TypeScript,
+            interfaces: vec![],
+            dependencies: vec![],
+            sinks: vec![],
+            // 2 ImportInfo entries → will become 2 Import references
+            imports: vec![
+                ImportInfo {
+                    source: "express".into(),
+                    specifiers: vec!["Router".into()],
+                    line: 1,
+                },
+                ImportInfo {
+                    source: "axios".into(),
+                    specifiers: vec!["default".into()],
+                    line: 2,
+                },
+            ],
+            symbols: vec![],
+            // 1 Call reference (not Import)
+            references: vec![Reference {
+                source_symbol: "handler".into(),
+                source_file: PathBuf::from("src/app.ts"),
+                source_line: 5,
+                target_symbol: "getUser".into(),
+                target_file: Some(PathBuf::from("src/services.ts")),
+                target_line: Some(10),
+                reference_kind: ReferenceKind::Call,
+                confidence: 0.90,
+                resolution_method: ResolutionMethod::ImportBased,
+                is_test_reference: false,
+            }],
+            data_models: vec![],
+            env_dependencies: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 100,
+            content_hash: None,
+            git_metadata: None,
+        };
+
+        let model = build_code_model(&[ext], "proj");
+
+        // The 2 ImportInfo entries produce 2 Import references via the resolver.
+        // total_imports counts ReferenceKind::Import, NOT ImportInfo entries.
+        let actual_import_refs = model.components[0]
+            .references
+            .iter()
+            .filter(|r| r.reference_kind == ReferenceKind::Import)
+            .count();
+        assert_eq!(model.stats.total_imports, actual_import_refs);
+        assert_eq!(model.stats.total_imports, 2);
+    }
+
+    #[test]
+    fn resolution_method_distribution_is_populated() {
+        let ext = FileExtraction {
+            file: PathBuf::from("src/app.ts"),
+            language: SupportedLanguage::TypeScript,
+            interfaces: vec![],
+            dependencies: vec![],
+            sinks: vec![],
+            imports: vec![],
+            symbols: vec![],
+            references: vec![
+                Reference {
+                    source_symbol: "a".into(),
+                    source_file: PathBuf::from("src/app.ts"),
+                    source_line: 1,
+                    target_symbol: "b".into(),
+                    target_file: Some(PathBuf::from("src/b.ts")),
+                    target_line: Some(1),
+                    reference_kind: ReferenceKind::Call,
+                    confidence: 0.95,
+                    resolution_method: ResolutionMethod::ImportBased,
+                    is_test_reference: false,
+                },
+                Reference {
+                    source_symbol: "a".into(),
+                    source_file: PathBuf::from("src/app.ts"),
+                    source_line: 2,
+                    target_symbol: "c".into(),
+                    target_file: Some(PathBuf::from("src/app.ts")),
+                    target_line: Some(10),
+                    reference_kind: ReferenceKind::Call,
+                    confidence: 0.90,
+                    resolution_method: ResolutionMethod::SameFile,
+                    is_test_reference: false,
+                },
+                Reference {
+                    source_symbol: "a".into(),
+                    source_file: PathBuf::from("src/app.ts"),
+                    source_line: 3,
+                    target_symbol: "unknown".into(),
+                    target_file: None,
+                    target_line: None,
+                    reference_kind: ReferenceKind::Call,
+                    confidence: 0.0,
+                    resolution_method: ResolutionMethod::Unresolved,
+                    is_test_reference: false,
+                },
+                Reference {
+                    source_symbol: "a".into(),
+                    source_file: PathBuf::from("src/app.ts"),
+                    source_line: 4,
+                    target_symbol: "d".into(),
+                    target_file: Some(PathBuf::from("src/d.ts")),
+                    target_line: Some(1),
+                    reference_kind: ReferenceKind::Call,
+                    confidence: 0.95,
+                    resolution_method: ResolutionMethod::ImportBased,
+                    is_test_reference: false,
+                },
+            ],
+            data_models: vec![],
+            env_dependencies: vec![],
+            file_role: FileRole::Implementation,
+            estimated_tokens: 100,
+            content_hash: None,
+            git_metadata: None,
+        };
+
+        let model = build_code_model(&[ext], "proj");
+        let dist = &model.stats.resolution_method_distribution;
+
+        assert_eq!(dist.get("import_based").copied().unwrap_or(0), 2);
+        assert_eq!(dist.get("same_file").copied().unwrap_or(0), 1);
+        assert_eq!(dist.get("unresolved").copied().unwrap_or(0), 1);
+        assert_eq!(dist.get("global_unique").copied().unwrap_or(0), 0);
     }
 }

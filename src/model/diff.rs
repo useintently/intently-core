@@ -352,4 +352,145 @@ mod tests {
         let deserialized: SemanticDiff = serde_json::from_str(&json).unwrap();
         assert_eq!(diff, deserialized);
     }
+
+    #[test]
+    fn detects_added_dependency() {
+        let old = make_model(vec![], vec![], vec![]);
+        let new = make_model(
+            vec![],
+            vec![Dependency {
+                target: "https://api.stripe.com".into(),
+                dependency_type: DependencyType::HttpCall,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/payments.ts"), 5),
+            }],
+            vec![],
+        );
+
+        let diff = compute_diff(&old, &new);
+
+        assert_eq!(diff.dependency_changes.len(), 1);
+        assert_eq!(diff.dependency_changes[0].change_type, ChangeType::Added);
+        assert_eq!(
+            diff.dependency_changes[0].dependency.target,
+            "https://api.stripe.com"
+        );
+    }
+
+    #[test]
+    fn detects_removed_dependency() {
+        let old = make_model(
+            vec![],
+            vec![Dependency {
+                target: "https://legacy.internal/v1".into(),
+                dependency_type: DependencyType::HttpCall,
+                anchor: SourceAnchor::from_line(PathBuf::from("src/legacy.ts"), 12),
+            }],
+            vec![],
+        );
+        let new = make_model(vec![], vec![], vec![]);
+
+        let diff = compute_diff(&old, &new);
+
+        assert_eq!(diff.dependency_changes.len(), 1);
+        assert_eq!(diff.dependency_changes[0].change_type, ChangeType::Removed);
+        assert_eq!(
+            diff.dependency_changes[0].dependency.target,
+            "https://legacy.internal/v1"
+        );
+    }
+
+    #[test]
+    fn simultaneous_addition_and_removal() {
+        let old = make_model(
+            vec![endpoint(HttpMethod::Get, "/api/v1/users", None)],
+            vec![],
+            vec![],
+        );
+        let new = make_model(
+            vec![endpoint(HttpMethod::Post, "/api/v2/orders", None)],
+            vec![],
+            vec![],
+        );
+
+        let diff = compute_diff(&old, &new);
+
+        assert_eq!(diff.interface_changes.len(), 2);
+
+        let added = diff
+            .interface_changes
+            .iter()
+            .find(|ic| ic.change_type == ChangeType::Added);
+        let removed = diff
+            .interface_changes
+            .iter()
+            .find(|ic| ic.change_type == ChangeType::Removed);
+
+        assert!(added.is_some(), "expected an Added change");
+        assert!(removed.is_some(), "expected a Removed change");
+        assert_eq!(added.unwrap().interface.path, "/api/v2/orders");
+        assert_eq!(removed.unwrap().interface.path, "/api/v1/users");
+    }
+
+    #[test]
+    fn authed_new_endpoint_not_high_security_risk() {
+        let old = make_model(vec![], vec![], vec![]);
+        let new = make_model(
+            vec![endpoint(
+                HttpMethod::Post,
+                "/api/admin/settings",
+                Some(AuthKind::Middleware("authMiddleware".into())),
+            )],
+            vec![],
+            vec![],
+        );
+
+        let diff = compute_diff(&old, &new);
+
+        assert_eq!(diff.interface_changes.len(), 1);
+        assert_eq!(diff.interface_changes[0].change_type, ChangeType::Added);
+        assert_ne!(
+            diff.risk_summary.security,
+            RiskLevel::High,
+            "authenticated new endpoint should not trigger High security risk"
+        );
+    }
+
+    #[test]
+    fn removed_pii_sink_not_high_security_risk() {
+        let old = make_model(
+            vec![],
+            vec![],
+            vec![Sink {
+                sink_type: SinkType::Log,
+                anchor: SourceAnchor::from_line(PathBuf::from("handler.ts"), 10),
+                text: "console.log(user.ssn)".into(),
+                contains_pii: true,
+            }],
+        );
+        let new = make_model(vec![], vec![], vec![]);
+
+        let diff = compute_diff(&old, &new);
+
+        assert_eq!(diff.sink_changes.len(), 1);
+        assert_eq!(diff.sink_changes[0].change_type, ChangeType::Removed);
+        assert_ne!(
+            diff.risk_summary.security,
+            RiskLevel::High,
+            "removing a PII sink should not trigger High security risk"
+        );
+    }
+
+    #[test]
+    fn diff_of_empty_models_is_empty() {
+        let old = make_model(vec![], vec![], vec![]);
+        let new = make_model(vec![], vec![], vec![]);
+
+        let diff = compute_diff(&old, &new);
+
+        assert!(diff.interface_changes.is_empty());
+        assert!(diff.dependency_changes.is_empty());
+        assert!(diff.sink_changes.is_empty());
+        assert_eq!(diff.risk_summary.security, RiskLevel::Low);
+        assert_eq!(diff.risk_summary.reliability, RiskLevel::Low);
+    }
 }

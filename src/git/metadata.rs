@@ -36,9 +36,9 @@ pub fn compute_git_metadata(repo_root: &Path) -> Option<HashMap<PathBuf, GitFile
     // Run git log with a custom format:
     // For each commit: RECORD_SEP, author name, unix timestamp, then --name-only for changed files
     let max_commits_arg = format!("-{MAX_COMMITS}");
-    let format_arg = format!("{RECORD_SEP}%n%an%n%at");
+    let format_arg = format!("--format={RECORD_SEP}%n%an%n%at");
     let output = Command::new("git")
-        .args(["log", "--format", &format_arg, "--name-only", &max_commits_arg])
+        .args(["log", &format_arg, "--name-only", &max_commits_arg])
         .current_dir(repo_root)
         .output()
         .ok()?;
@@ -317,36 +317,6 @@ mod tests {
     #[ignore]
     fn compute_git_metadata_works_on_own_repo() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        eprintln!("manifest_dir: {:?}", manifest_dir);
-
-        // Debug: run the exact same command as compute_git_metadata
-        let format_arg = format!("{RECORD_SEP}%n%an%n%at");
-        let debug_output = Command::new("git")
-            .args([
-                "log",
-                "--format",
-                &format_arg,
-                "--name-only",
-                "-3",
-            ])
-            .current_dir(&manifest_dir)
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&debug_output.stdout);
-        eprintln!(
-            "git log status={}, stdout_len={}, first_200={}",
-            debug_output.status,
-            stdout.len(),
-            &stdout[..stdout.len().min(200)]
-        );
-
-        // Also debug parse_git_log directly
-        let parsed = parse_git_log(&stdout, &manifest_dir);
-        eprintln!("parse_git_log returned {} entries", parsed.len());
-        if !parsed.is_empty() {
-            let first_key = parsed.keys().next().unwrap();
-            eprintln!("first key: {:?}", first_key);
-        }
 
         let result = compute_git_metadata(&manifest_dir);
         assert!(result.is_some(), "should produce metadata for own repo");
@@ -361,5 +331,17 @@ mod tests {
             "engine.rs should have git metadata, keys: {:?}",
             metadata.keys().take(5).collect::<Vec<_>>()
         );
+
+        let meta = engine_meta.unwrap();
+        assert!(meta.commit_count > 0, "engine.rs should have commits");
+        assert!(meta.distinct_authors > 0, "engine.rs should have authors");
+        assert!(meta.last_modified.is_some(), "should have last_modified");
+        assert!(meta.last_author.is_some(), "should have last_author");
+
+        // Verify stats computation
+        let stats = compute_git_stats(&metadata);
+        assert!(stats.total_authors > 0);
+        assert!(stats.total_commits > 0);
+        assert!(!stats.hottest_files.is_empty());
     }
 }

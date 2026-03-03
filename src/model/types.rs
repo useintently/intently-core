@@ -27,11 +27,34 @@ pub enum ResolutionMethod {
     SameFile,
     /// Resolved to a globally unique symbol name.
     GlobalUnique,
-    /// Multiple global matches — resolved to best heuristic pick.
+    /// Multiple global matches — resolved to symbol in the same directory as the caller.
+    GlobalSameDir,
+    /// Multiple global matches — resolved to arbitrary first match.
     GlobalAmbiguous,
+    /// Resolved as an external dependency (stdlib, third-party package).
+    ///
+    /// The import source was classified as a non-project dependency (no `./` or
+    /// `../` prefix). The symbol lives outside the project boundary — in the
+    /// language's standard library, a third-party package, or a system library.
+    External,
     /// Could not be resolved to any known symbol.
     #[default]
     Unresolved,
+}
+
+impl ResolutionMethod {
+    /// Machine-readable short label for this resolution method.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ImportBased => "import_based",
+            Self::SameFile => "same_file",
+            Self::GlobalUnique => "global_unique",
+            Self::GlobalSameDir => "global_same_dir",
+            Self::GlobalAmbiguous => "global_ambiguous",
+            Self::External => "external",
+            Self::Unresolved => "unresolved",
+        }
+    }
 }
 
 /// Precise source location anchoring a semantic fact to the CST.
@@ -791,6 +814,7 @@ pub struct CodeModelStats {
     pub total_dependencies: usize,
     pub total_sinks: usize,
     pub total_symbols: usize,
+    /// Number of import references (counted from `ReferenceKind::Import`).
     pub total_imports: usize,
     pub total_references: usize,
     pub total_data_models: usize,
@@ -816,6 +840,10 @@ pub struct CodeModelStats {
     /// Total number of environment variable references across all files.
     #[serde(default)]
     pub total_env_dependencies: usize,
+    /// Breakdown of references by resolution method (import_based, same_file,
+    /// global_unique, global_ambiguous, unresolved).
+    #[serde(default)]
+    pub resolution_method_distribution: HashMap<String, usize>,
     /// Repository-level git statistics (churn, authorship).
     /// `None` when the `git` feature is disabled or not in a git repo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -951,6 +979,7 @@ mod tests {
                 total_directories: 0,
                 total_test_symbols: 0,
                 total_env_dependencies: 0,
+                resolution_method_distribution: HashMap::new(),
                 git_stats: None,
             },
             file_tree: None,
@@ -1661,5 +1690,19 @@ mod tests {
             !reference.is_test_reference,
             "missing field should default to false"
         );
+    }
+
+    #[test]
+    fn resolution_method_as_str_returns_snake_case() {
+        assert_eq!(ResolutionMethod::ImportBased.as_str(), "import_based");
+        assert_eq!(ResolutionMethod::SameFile.as_str(), "same_file");
+        assert_eq!(ResolutionMethod::GlobalUnique.as_str(), "global_unique");
+        assert_eq!(ResolutionMethod::GlobalSameDir.as_str(), "global_same_dir");
+        assert_eq!(
+            ResolutionMethod::GlobalAmbiguous.as_str(),
+            "global_ambiguous"
+        );
+        assert_eq!(ResolutionMethod::External.as_str(), "external");
+        assert_eq!(ResolutionMethod::Unresolved.as_str(), "unresolved");
     }
 }

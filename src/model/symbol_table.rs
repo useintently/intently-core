@@ -151,7 +151,7 @@ impl SymbolTable {
                         return ResolveResult {
                             location: Some(loc.clone()),
                             confidence: 0.60,
-                            method: ResolutionMethod::GlobalAmbiguous,
+                            method: ResolutionMethod::GlobalSameDir,
                         };
                     }
                 }
@@ -451,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_via_global_ambiguous_prefers_same_directory() {
+    fn resolve_via_global_same_dir_prefers_same_directory() {
         let fs = make_file_symbols();
         let table = SymbolTable::from_file_symbols(&fs);
 
@@ -466,7 +466,7 @@ mod tests {
         );
 
         assert!(result.location.is_some());
-        assert_eq!(result.method, ResolutionMethod::GlobalAmbiguous);
+        assert_eq!(result.method, ResolutionMethod::GlobalSameDir);
         assert_eq!(result.confidence, 0.60);
         assert_eq!(
             result.location.unwrap().file,
