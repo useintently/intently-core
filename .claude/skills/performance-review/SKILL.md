@@ -1,84 +1,50 @@
+---
+name: reviewing-performance
+description: Reviews performance-sensitive code in intently-core. Checks algorithmic complexity, incremental computation, memory allocation patterns, async correctness, and concurrency. Use when changes touch hot paths (CodeModel building, diff computation, graph analysis), data structures, async code, or benchmarks.
+---
+
 # Performance Review
 
-Performance-focused review for the Intently IDE project.
+## Critical rules
 
-## Trigger
+**ALWAYS:**
+- Run `criterion` benchmarks before AND after performance-related changes — no regressions without ADR
+- Use `Vec::with_capacity` when the collection size is known or estimable
+- Use `tokio::spawn_blocking` for CPU-intensive work in async contexts
+- Verify incremental computation: single file change must NOT trigger full CodeModel rebuild
+- Profile before optimizing — measure, don't guess
 
-Activate when PRs or changes touch:
-- Hot paths (IR parsing, diff computation, evidence evaluation)
-- Data structure choices for large datasets
-- Async/concurrent code
-- Benchmark files or performance-related configuration
+**NEVER:**
+- Introduce O(n²) or worse in any hot path (builder, diff, graph, symbol_table, engine)
+- Allocate inside tight loops — reuse buffers, pre-allocate, collect into pre-sized Vecs
+- Use `std::fs` or `std::thread::sleep` in async code — use tokio equivalents
+- Create unbounded caches or queues — all growth must have a size limit
+- Clone `String`, `Vec`, or `HashMap` in hot paths without measured justification — borrow first
 
-Keywords: "performance review", "review performance", "benchmark", "perf review", "optimization"
+## intently-core hot paths
 
-## What This Skill Does
+- CodeModel building (`src/model/builder.rs`) — incremental per-file updates
+- Semantic diff (`src/model/diff.rs`) — behavioral delta computation
+- KnowledgeGraph (`src/model/graph/`) — impact analysis (BFS), cycle detection (Tarjan SCC)
+- Extraction pipeline (`src/engine.rs`) — chunked parallel extraction (CHUNK_SIZE=500)
+- Symbol resolution (`src/model/symbol_table.rs`) — two-level lookup (per-file exact + global fuzzy)
 
-1. **Algorithmic Complexity** — Check for expensive operations
-   - No O(n^2) or worse in hot paths (IR traversal, diff, search)
-   - Data structure choice matches access pattern (HashMap vs BTreeMap vs Vec)
-   - Sorting, searching, and filtering use appropriate algorithms
-   - Nested loops over large collections are flagged
+## Checklist
 
-2. **Incremental Computation** — Verify unnecessary recomputation is avoided
-   - IR updates are incremental (only changed files reprocessed)
-   - Semantic diff reuses unchanged subtrees
-   - Evidence selection caches previous results
-   - Memoization where pure functions are called repeatedly
+- [ ] No O(n²) in hot paths listed above
+- [ ] Incremental computation: only changed files reprocessed, unchanged nodes retain identity
+- [ ] `Vec::with_capacity` for known-size collections, no allocation in tight loops
+- [ ] No blocking operations in async context (use `tokio::spawn_blocking` for CPU work)
+- [ ] Synchronization is correct and minimal (lock ordering, bounded queues/caches)
+- [ ] New hot-path code has `criterion` benchmarks compared against baseline
 
-3. **Benchmark Results** — Review criterion benchmarks
-   - New hot-path code has criterion benchmarks
-   - Benchmark results compared against baseline
-   - No regression beyond acceptable threshold (documented per benchmark)
-   - Benchmarks are deterministic and reproducible
-
-4. **Memory Allocation** — Check allocation patterns
-   - Pre-allocation for known-size collections (`Vec::with_capacity`)
-   - No allocation in tight loops (reuse buffers)
-   - Large data structures use appropriate smart pointers
-   - No unbounded growth (queues, caches have size limits)
-
-5. **Async Correctness** — Validate async/await usage
-   - No blocking operations in async context (`std::fs`, `std::thread::sleep`)
-   - CPU-intensive work is offloaded to blocking threads (`spawn_blocking`)
-   - No unnecessary `.await` points that increase latency
-   - Task cancellation is handled gracefully
-
-6. **Concurrency** — Check parallel execution patterns
-   - Shared state uses appropriate synchronization (`Mutex`, `RwLock`, atomics)
-   - Lock granularity is appropriate (not too coarse, not too fine)
-   - No deadlock potential (consistent lock ordering)
-   - Rayon or tokio task parallelism for CPU-bound batch work
-
-## What to Check
-
-- [ ] No O(n^2) in hot paths
-- [ ] Incremental computation for IR, diff, and evidence
-- [ ] Criterion benchmarks for new hot-path code
-- [ ] Pre-allocated collections, no allocation in tight loops
-- [ ] No blocking in async context
-- [ ] Synchronization is correct and minimal
-- [ ] Caches and queues have bounded size
-
-## Output Format
+## Output format
 
 ```
 ## Performance Review: <file_path>
 
-### Algorithmic Complexity
-- [PASS/FAIL] <detail>
-
-### Incremental Computation
-- [PASS/FAIL] <detail>
-
-### Memory Allocation
-- [PASS/FAIL] <detail>
-
-### Async Correctness
-- [PASS/FAIL] <detail>
-
-### Concurrency
-- [PASS/FAIL] <detail>
+### Findings
+- [PASS/FAIL] <category>: <detail>
 
 ### Verdict: APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION
 ```

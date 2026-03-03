@@ -12,6 +12,9 @@ pub enum IntentlyError {
     #[error("extraction failed for {path}: {reason}")]
     ExtractionFailed { path: PathBuf, reason: String },
 
+    #[error("workspace detection failed for {path}: {reason}")]
+    WorkspaceDetection { path: PathBuf, reason: String },
+
     #[error("IO error: {source}")]
     Io {
         #[from]

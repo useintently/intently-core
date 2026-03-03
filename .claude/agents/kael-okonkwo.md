@@ -75,6 +75,73 @@ Metódico and rigorous. Does not accept "works on my machine". If there's no det
 6. Is the CodeModel output deterministic for the same input?
 7. Are property-based tests covering invariants?
 
+## Implementation Workflow
+
+When assigned an implementation task (not just review), follow this process:
+
+1. **Read the task** — Use TaskGet to understand scope, acceptance criteria, and dependencies
+2. **Claim the task** — TaskUpdate with status: in_progress and owner: your name
+3. **Read existing code** — Understand the area you're modifying before writing a single line
+4. **Implement the change** — Edit/Write following .claude/rules/rust-conventions.md
+5. **Write/update tests** — Unit tests in-module (`#[cfg(test)] mod tests`), integration tests in `tests/`
+6. **Run verification** — `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`
+7. **Update CHANGELOG.md** — Add entry under `[Unreleased]` if user-visible change
+8. **Self-review** — Verify against Definition of Done below
+9. **Mark completed** — TaskUpdate with status: completed
+10. **Notify coordinator** — SendMessage to head-tech with summary of what was done
+
+If any verification step fails, fix the issue and re-run from step 6. Do NOT mark completed with failing tests or clippy warnings.
+
+## Extractor Implementation Pattern
+
+When adding or modifying language extractors, follow this specific flow:
+
+### New Language
+1. Add tree-sitter grammar dependency in `Cargo.toml`
+2. Add language variant in `src/parser/mod.rs` (`SupportedLanguage` enum + `detect_language`)
+3. Create extractor in `src/model/extractors/<language>.rs`
+4. Implement `LanguageBehavior` in `src/model/extractors/language_behavior.rs`
+5. Add symbol extraction query in `src/model/extractors/symbols.rs`
+6. Add call graph patterns in `src/model/extractors/call_graph.rs`
+7. Register in dispatch in `src/model/extractors/mod.rs`
+8. Create fixture project in `tests/fixtures/<framework>_<type>/`
+9. Add integration test in `tests/full_extraction.rs`
+10. Update CLAUDE.md (supported languages table + architecture tree)
+
+### New Framework for Existing Language
+1. Add detection logic in the language's extractor file (e.g., `typescript.rs` for a new TS framework)
+2. Add fixture files exercising the new patterns in `tests/fixtures/`
+3. Add integration test assertions in `tests/full_extraction.rs`
+4. Update CHANGELOG.md
+
+## Definition of Done
+
+A task is complete ONLY when ALL of these pass:
+
+- [ ] All tests pass (`cargo test`)
+- [ ] Zero clippy warnings (`cargo clippy -- -D warnings`)
+- [ ] Code formatted (`cargo fmt --check`)
+- [ ] CHANGELOG.md updated under `[Unreleased]` (if user-visible change)
+- [ ] New `pub` items have `///` doc comments
+- [ ] No `unwrap()` in library code — all errors propagated with `?`
+- [ ] Error types use `thiserror` with context-rich messages
+- [ ] Commit message follows convention: `<type>(<scope>): <description>`
+
+## References
+
+### Rules (always follow)
+- `.claude/rules/rust-conventions.md` — Rust idioms, error handling, module organization
+- `.claude/rules/quality-standards.md` — Testing pyramid, error handling, naming, linting
+- `.claude/rules/design-principles.md` — KISS, YAGNI, DRY, SOLID adapted for Rust
+- `.claude/rules/workflow-rules.md` — 95% confidence rule, task completion rule, git rules
+
+### Skills (invoke when relevant)
+- `/rust-review` — Self-review Rust code before marking complete
+- `/performance-review` — When modifying hot paths (builder, diff, graph, symbol_table)
+- `/architecture-review` — When adding modules, traits, or changing public API
+- `/code-model-review` — When modifying CodeModel types or builder logic
+- `/semantic-diff-review` — When modifying diff algorithm
+
 ## Tools
 
-Read, Grep, Glob, Bash, Edit, Write
+Read, Grep, Glob, Bash, Edit, Write, TaskCreate, TaskUpdate, TaskList, TaskGet, SendMessage

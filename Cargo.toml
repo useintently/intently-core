@@ -4,6 +4,10 @@ edition = "2021"
 version = "0.1.0"
 license = "MIT"
 
+[features]
+default = []
+git = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -11,24 +15,32 @@ thiserror = "2"
 tracing = "0.1"
 tree-sitter = "0.26"
 tree-sitter-c = "0.24"
-tree-sitter-c-sharp = "0.23"
-tree-sitter-cpp = "0.23"
+tree-sitter-c-sharp = "0.23.1"
+tree-sitter-cpp = "0.23.4"
 tree-sitter-go = "0.25"
-tree-sitter-java = "0.23"
+tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25"
 tree-sitter-kotlin-ng = "1.1"
-tree-sitter-php = "0.24"
+tree-sitter-php = "0.24.2"
 tree-sitter-python = "0.25"
-tree-sitter-ruby = "0.23"
+tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24"
 tree-sitter-scala = "0.24"
-tree-sitter-swift = "0.7"
+tree-sitter-swift = "0.7.1"
 tree-sitter-typescript = "0.23.2"
 ast-grep-core = "0.41"
 petgraph = "0.8"
 rayon = "1"
 similar = "2"
+sha2 = "0.10"
 walkdir = "2"
+toml = "0.8"
+serde_yaml = "0.9"
+glob = "0.3"
+
+[[example]]
+name = "analyze_fixtures"
+path = "examples/analyze_fixtures.rs"
 
 [dev-dependencies]
 tempfile = "3"

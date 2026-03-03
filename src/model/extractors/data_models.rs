@@ -15,8 +15,8 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::types::{DataModel, DataModelKind, FieldInfo, Visibility};
+use crate::parser::SupportedLanguage;
 
 use super::common::{anchor_from_node, node_text};
 
@@ -91,12 +91,7 @@ fn collect_models(
 ///   - body: `class_body` containing `public_field_definition` / `property_declaration`
 /// - `interface_declaration` with optional `extends_type_clause`
 ///   - body: `interface_body` / `object_type` containing `property_signature`
-fn try_extract_ts_model(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    models: &mut Vec<DataModel>,
-) {
+fn try_extract_ts_model(node: &Node, source: &str, file_path: &Path, models: &mut Vec<DataModel>) {
     match node.kind() {
         "class_declaration" => {
             let name = child_by_field(node, "name")
@@ -436,8 +431,7 @@ fn try_extract_self_assignment(node: &Node, source: &str, fields: &mut Vec<Field
     }
 
     // Check for type annotation
-    let field_type = child_by_field(node, "type")
-        .map(|n| node_text(&n, source));
+    let field_type = child_by_field(node, "type").map(|n| node_text(&n, source));
 
     let visibility = if field_name.starts_with('_') {
         Some(Visibility::Private)
@@ -465,8 +459,7 @@ fn try_extract_python_class_level_field(node: &Node, source: &str, fields: &mut 
         // Could be a class-level annotated variable like `name: str = "default"`
         if let Some(colon_pos) = text.find(':') {
             let field_name = text[..colon_pos].trim();
-            if !field_name.is_empty()
-                && field_name.chars().all(|c| c.is_alphanumeric() || c == '_')
+            if !field_name.is_empty() && field_name.chars().all(|c| c.is_alphanumeric() || c == '_')
             {
                 let type_part = text[colon_pos + 1..].trim();
                 let field_type = type_part
@@ -587,8 +580,7 @@ fn extract_java_fields(body: &Node, source: &str, fields: &mut Vec<FieldInfo>) {
     for i in 0..count {
         if let Some(child) = body.child(i as u32) {
             if child.kind() == "field_declaration" {
-                let field_type = child_by_field(&child, "type")
-                    .map(|n| node_text(&n, source));
+                let field_type = child_by_field(&child, "type").map(|n| node_text(&n, source));
 
                 let visibility = detect_java_visibility(&child, source);
 
@@ -684,10 +676,7 @@ fn find_csharp_base_type(node: &Node, source: &str) -> Option<String> {
         for i in 0..bases.child_count() {
             if let Some(child) = bases.child(i as u32) {
                 let kind = child.kind();
-                if kind == "identifier"
-                    || kind == "generic_name"
-                    || kind == "qualified_name"
-                {
+                if kind == "identifier" || kind == "generic_name" || kind == "qualified_name" {
                     let text = node_text(&child, source);
                     if !text.is_empty() {
                         return Some(text);
@@ -720,8 +709,7 @@ fn extract_csharp_fields(body: &Node, source: &str, fields: &mut Vec<FieldInfo>)
     for i in 0..count {
         if let Some(child) = body.child(i as u32) {
             if child.kind() == "field_declaration" {
-                let field_type = child_by_field(&child, "type")
-                    .map(|n| node_text(&n, source));
+                let field_type = child_by_field(&child, "type").map(|n| node_text(&n, source));
 
                 let visibility = detect_csharp_visibility(&child, source);
 
@@ -780,12 +768,7 @@ fn detect_csharp_visibility(node: &Node, source: &str) -> Option<Visibility> {
 /// - `type_declaration` containing `type_spec`
 ///   - `type_spec` has `name` (type_identifier) and `type` (struct_type)
 ///   - `struct_type` has `field_declaration_list` → `field_declaration` nodes
-fn try_extract_go_model(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    models: &mut Vec<DataModel>,
-) {
+fn try_extract_go_model(node: &Node, source: &str, file_path: &Path, models: &mut Vec<DataModel>) {
     if node.kind() != "type_declaration" {
         return;
     }
@@ -848,20 +831,16 @@ fn extract_go_struct_fields(struct_node: &Node, source: &str, fields: &mut Vec<F
                     if field_name.is_empty() {
                         continue;
                     }
-                    let field_type = child_by_field(&field, "type")
-                        .map(|n| node_text(&n, source));
+                    let field_type = child_by_field(&field, "type").map(|n| node_text(&n, source));
 
                     // Go: capitalized → public, lowercase → private
-                    let visibility = field_name
-                        .chars()
-                        .next()
-                        .map(|c| {
-                            if c.is_uppercase() {
-                                Visibility::Public
-                            } else {
-                                Visibility::Private
-                            }
-                        });
+                    let visibility = field_name.chars().next().map(|c| {
+                        if c.is_uppercase() {
+                            Visibility::Public
+                        } else {
+                            Visibility::Private
+                        }
+                    });
 
                     fields.push(FieldInfo {
                         name: field_name,
@@ -930,8 +909,7 @@ fn extract_rust_fields(list: &Node, source: &str, fields: &mut Vec<FieldInfo>) {
                 if name.is_empty() {
                     continue;
                 }
-                let field_type = child_by_field(&child, "type")
-                    .map(|n| node_text(&n, source));
+                let field_type = child_by_field(&child, "type").map(|n| node_text(&n, source));
 
                 // Check for `pub` visibility modifier
                 let visibility = if has_visibility_modifier(&child) {

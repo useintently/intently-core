@@ -13,11 +13,11 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::patterns;
 use crate::model::types::*;
+use crate::parser::SupportedLanguage;
 
-use super::common::{self, anchor_from_node, node_text, truncate_call_text};
+use super::common::{self, anchor_from_node, node_text, node_text_ref, truncate_call_text};
 
 /// Spring mapping annotations → HTTP methods.
 const MAPPING_ANNOTATIONS: &[(&str, &str)] = &[
@@ -43,12 +43,7 @@ pub fn extract(
     extraction
 }
 
-fn extract_recursive(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     match node.kind() {
         // Java method declarations can have annotations
         "method_declaration" => {
@@ -112,11 +107,19 @@ fn try_extract_annotated_route(
     }
 
     if let Some((method, path, anchor)) = route_info {
+        // Extract method name from the method_declaration node
+        let handler_name = node
+            .child_by_field_name("name")
+            .map(|n| node_text(&n, source));
+
         extraction.interfaces.push(Interface {
             method,
-            path,
+            path: path.clone(),
             auth,
             anchor,
+            parameters: common::extract_path_params(&path),
+            handler_name,
+            request_body_type: None,
         });
     }
 }
@@ -173,11 +176,19 @@ fn try_extract_annotated_route_kotlin(
     }
 
     if let Some((method, path, anchor)) = route_info {
+        // Extract function name from the function_declaration node
+        let handler_name = node
+            .child_by_field_name("name")
+            .map(|n| node_text(&n, source));
+
         extraction.interfaces.push(Interface {
             method,
-            path,
+            path: path.clone(),
             auth,
             anchor,
+            parameters: common::extract_path_params(&path),
+            handler_name,
+            request_body_type: None,
         });
     }
 }
@@ -290,9 +301,7 @@ fn collect_annotations(
                             if mod_child.kind() == "marker_annotation"
                                 || mod_child.kind() == "annotation"
                             {
-                                if let Some(name) =
-                                    extract_annotation_name(&mod_child, source)
-                                {
+                                if let Some(name) = extract_annotation_name(&mod_child, source) {
                                     let text = node_text(&mod_child, source);
                                     result.push((
                                         name,
@@ -350,26 +359,20 @@ fn extract_annotation_name(node: &Node, source: &str) -> Option<String> {
 }
 
 /// Parse a Spring mapping annotation into HTTP method + path.
-fn try_parse_mapping_annotation(
-    ann_name: &str,
-    ann_text: &str,
-) -> Option<(HttpMethod, String)> {
+fn try_parse_mapping_annotation(ann_name: &str, ann_text: &str) -> Option<(HttpMethod, String)> {
     // Check specific mapping annotations: @GetMapping, @PostMapping, etc.
     for (mapping, method_str) in MAPPING_ANNOTATIONS {
         if ann_name == *mapping {
             let method = common::parse_http_method(method_str)?;
-            let path = extract_path_from_annotation_text(ann_text)
-                .unwrap_or_default();
+            let path = extract_path_from_annotation_text(ann_text).unwrap_or_default();
             return Some((method, path));
         }
     }
 
     // Check @RequestMapping(value="/path", method=RequestMethod.GET)
     if ann_name == "RequestMapping" {
-        let path = extract_path_from_annotation_text(ann_text)
-            .unwrap_or_default();
-        let method = extract_request_method_from_text(ann_text)
-            .unwrap_or(HttpMethod::All);
+        let path = extract_path_from_annotation_text(ann_text).unwrap_or_default();
+        let method = extract_request_method_from_text(ann_text).unwrap_or(HttpMethod::All);
         return Some((method, path));
     }
 
@@ -398,9 +401,7 @@ fn extract_request_method_from_text(text: &str) -> Option<HttpMethod> {
         Some(HttpMethod::Post)
     } else if text_upper.contains("REQUESTMETHOD.PUT") || text_upper.contains("METHOD.PUT") {
         Some(HttpMethod::Put)
-    } else if text_upper.contains("REQUESTMETHOD.DELETE")
-        || text_upper.contains("METHOD.DELETE")
-    {
+    } else if text_upper.contains("REQUESTMETHOD.DELETE") || text_upper.contains("METHOD.DELETE") {
         Some(HttpMethod::Delete)
     } else if text_upper.contains("REQUESTMETHOD.PATCH") || text_upper.contains("METHOD.PATCH") {
         Some(HttpMethod::Patch)
@@ -411,11 +412,7 @@ fn extract_request_method_from_text(text: &str) -> Option<HttpMethod> {
 
 /// Check if an annotation name indicates auth.
 fn is_auth_annotation(name: &str) -> bool {
-    let auth_annotations = [
-        "PreAuthorize",
-        "Secured",
-        "RolesAllowed",
-    ];
+    let auth_annotations = ["PreAuthorize", "Secured", "RolesAllowed"];
     auth_annotations.contains(&name) || patterns::is_auth_indicator(name)
 }
 
@@ -426,8 +423,8 @@ fn try_extract_http_call(
     file_path: &Path,
     extraction: &mut FileExtraction,
 ) {
-    let call_text = node_text(node, source);
-    let call_lower = call_text.to_lowercase();
+    let call_ref = node_text_ref(node, source);
+    let call_lower = call_ref.to_lowercase();
 
     // RestTemplate methods
     let is_rest_template = call_lower.contains("resttemplate")
@@ -452,7 +449,7 @@ fn try_extract_http_call(
         return;
     }
 
-    let display_text = truncate_call_text(call_text, 100);
+    let display_text = truncate_call_text(call_ref.to_string(), 100);
 
     extraction.dependencies.push(Dependency {
         target: display_text,
@@ -470,28 +467,28 @@ mod tests {
 
     fn extract_java(source: &str) -> FileExtraction {
         let path = PathBuf::from("Controller.java");
-        let parsed =
-            parser::parse_source(&path, source, SupportedLanguage::Java, None).unwrap();
+        let parsed = parser::parse_source(&path, source, SupportedLanguage::Java, None).unwrap();
         extract(&path, source, &parsed.tree, SupportedLanguage::Java)
     }
 
     fn extract_kotlin(source: &str) -> FileExtraction {
         let path = PathBuf::from("Controller.kt");
-        let parsed =
-            parser::parse_source(&path, source, SupportedLanguage::Kotlin, None).unwrap();
+        let parsed = parser::parse_source(&path, source, SupportedLanguage::Kotlin, None).unwrap();
         extract(&path, source, &parsed.tree, SupportedLanguage::Kotlin)
     }
 
     #[test]
     fn extracts_get_mapping_route() {
-        let ext = extract_java(r#"
+        let ext = extract_java(
+            r#"
 public class UserController {
     @GetMapping("/users")
     public List<User> listUsers() {
         return List.of();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/users");
@@ -499,14 +496,16 @@ public class UserController {
 
     #[test]
     fn extracts_post_mapping_route() {
-        let ext = extract_java(r#"
+        let ext = extract_java(
+            r#"
 public class OrderController {
     @PostMapping("/api/orders")
     public Order createOrder(@RequestBody OrderDto dto) {
         return new Order();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Post);
         assert_eq!(ext.interfaces[0].path, "/api/orders");
@@ -514,14 +513,16 @@ public class OrderController {
 
     #[test]
     fn extracts_request_mapping_with_method() {
-        let ext = extract_java(r#"
+        let ext = extract_java(
+            r#"
 public class ItemController {
     @RequestMapping(value = "/items", method = RequestMethod.GET)
     public List<Item> listItems() {
         return List.of();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/items");
@@ -529,13 +530,15 @@ public class ItemController {
 
     #[test]
     fn detects_pre_authorize_auth() {
-        let ext = extract_java(r#"
+        let ext = extract_java(
+            r#"
 public class AdminController {
     @PostMapping("/api/admin/users")
     @PreAuthorize("hasRole('ADMIN')")
     public void deleteUser(Long id) {}
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(
             ext.interfaces[0].auth,
@@ -545,7 +548,8 @@ public class AdminController {
 
     #[test]
     fn detects_secured_auth() {
-        let ext = extract_java(r#"
+        let ext = extract_java(
+            r#"
 public class SecureController {
     @GetMapping("/api/secure")
     @Secured("ROLE_USER")
@@ -553,60 +557,72 @@ public class SecureController {
         return "secure";
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_some());
     }
 
     #[test]
     fn no_auth_when_absent() {
-        let ext = extract_java(r#"
+        let ext = extract_java(
+            r#"
 public class PublicController {
     @GetMapping("/health")
     public String health() {
         return "ok";
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_none());
     }
 
     #[test]
     fn extracts_rest_template_http_call() {
-        let ext = extract_java(r#"
+        let ext = extract_java(
+            r#"
 public class PaymentService {
     public void charge() {
         restTemplate.getForObject("https://api.payment.com/charge", String.class);
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.dependencies.len(), 1);
-        assert_eq!(ext.dependencies[0].dependency_type, DependencyType::HttpCall);
+        assert_eq!(
+            ext.dependencies[0].dependency_type,
+            DependencyType::HttpCall
+        );
     }
 
     #[test]
     fn detects_pii_in_log() {
-        let ext = extract_java(r#"
+        let ext = extract_java(
+            r#"
 public class Handler {
     public void handle() {
         Logger.info("User email: " + user.email);
     }
 }
-"#);
+"#,
+        );
         assert!(ext.sinks.iter().any(|s| s.contains_pii));
     }
 
     #[test]
     fn kotlin_get_mapping() {
-        let ext = extract_kotlin(r#"
+        let ext = extract_kotlin(
+            r#"
 class UserController {
     @GetMapping("/api/users")
     fun listUsers(): List<User> {
         return emptyList()
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/api/users");
@@ -614,7 +630,8 @@ class UserController {
 
     #[test]
     fn realistic_spring_controller() {
-        let ext = extract_java(r#"
+        let ext = extract_java(
+            r#"
 import org.springframework.web.bind.annotation.*;
 import org.springframework.security.access.prepost.PreAuthorize;
 
@@ -641,7 +658,8 @@ public class ProductController {
         restTemplate.getForObject("https://audit.service/log", String.class);
     }
 }
-"#);
+"#,
+        );
         // 3 method-level routes (@GetMapping, @PostMapping, @DeleteMapping)
         // Class-level @RequestMapping is not on a method — not extracted as a route
         assert_eq!(ext.interfaces.len(), 3);

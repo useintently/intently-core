@@ -36,13 +36,16 @@ intently-core/
 │   │   ├── types.rs        # CodeModel, FileExtraction, Component, Interface, etc.
 │   │   ├── builder.rs      # Incremental model builder (O(1) per-file updates)
 │   │   ├── diff.rs         # Semantic diff between CodeModel states
-│   │   ├── graph.rs        # KnowledgeGraph (petgraph) — impact analysis, cycles
-│   │   ├── import_resolver.rs  # Cross-file import resolution
+│   │   ├── graph.rs        # KnowledgeGraph (petgraph) — impact analysis, cycles, WeightedEdge
+│   │   ├── graph_analysis.rs   # Composable graph analysis (GraphAnalyzer trait, AnalysisPipeline)
+│   │   ├── import_resolver.rs  # Cross-file import resolution with confidence scoring
+│   │   ├── symbol_table.rs     # Two-level symbol table (per-file exact + global fuzzy)
 │   │   ├── module_inference.rs # Module boundary detection
 │   │   ├── patterns.rs     # Shared cross-language patterns
 │   │   └── extractors/     # Per-language semantic extractors
 │   │       ├── mod.rs      # Extractor dispatch by language
 │   │       ├── common.rs   # Shared utilities (node text, PII detection, anchoring)
+│   │       ├── language_behavior.rs # LanguageBehavior trait — per-language conventions
 │   │       ├── typescript.rs   # Express, NestJS
 │   │       ├── python.rs       # FastAPI, Flask, Django
 │   │       ├── java.rs         # Spring Boot (also used for Kotlin)
@@ -51,15 +54,21 @@ intently-core/
 │   │       ├── php.rs          # Laravel
 │   │       ├── ruby.rs         # Rails
 │   │       ├── generic.rs      # Fallback (Rust, C, C++, Swift, Scala)
-│   │       ├── symbols.rs      # Tree-sitter query-based symbol extraction
-│   │       ├── call_graph.rs   # Call site detection per language
+│   │       ├── symbols.rs      # Tree-sitter query-based symbol extraction (via LanguageBehavior)
+│   │       ├── call_graph.rs   # Call site detection per language (via LanguageBehavior)
 │   │       ├── type_hierarchy.rs # extends/implements detection
 │   │       └── data_models.rs  # Struct/class/interface field extraction
-│   └── search/             # ast-grep structural code search
-│       ├── mod.rs
-│       └── pattern_engine.rs
+│   ├── git/                # Git metadata extraction (optional, feature-gated)
+│   │   ├── mod.rs          # Module gate: #[cfg(feature = "git")]
+│   │   └── metadata.rs     # compute_git_metadata(), compute_git_stats()
+│   ├── search/             # ast-grep structural code search
+│   │   ├── mod.rs
+│   │   └── pattern_engine.rs
+│   └── workspace/          # Monorepo workspace detection
+│       ├── mod.rs          # Types (WorkspaceKind, WorkspaceLayout, WorkspacePackage) + detect_workspace()
+│       └── detect.rs       # 5 manifest parsers (pnpm, npm, Cargo, Go, uv)
 ├── tests/
-│   ├── fixtures/           # 15 multi-file projects across 16 languages
+│   ├── fixtures/           # 22 multi-file projects across 16 languages
 │   ├── full_extraction.rs  # Integration tests: full pipeline per language
 │   └── real_world_validation.rs  # Real GitHub repo validation (#[ignore])
 ├── docs/
@@ -93,6 +102,20 @@ intently-core/
 | Swift | `generic.rs` | (log sinks only) |
 | Scala | `generic.rs` | (log sinks only) |
 
+## Supported Workspace Formats
+
+When pointed at a monorepo root, `intently-core` automatically detects the workspace layout and produces one `Component` per package. Single-project repos continue to work unchanged (one default component).
+
+| Format | Manifest File | Member Discovery |
+|--------|--------------|-----------------|
+| pnpm | `pnpm-workspace.yaml` | `packages:` glob patterns |
+| npm/yarn | `package.json` | `"workspaces"` field (array or object) |
+| Cargo | `Cargo.toml` | `[workspace] members` globs |
+| Go | `go.work` | `use (...)` block parsing |
+| uv | `pyproject.toml` | `[tool.uv.workspace] members` globs |
+
+Detection order: pnpm → npm → Cargo → Go → uv → single-project fallback.
+
 ---
 
 ## Public API
@@ -114,6 +137,13 @@ let extraction: FileExtraction = engine.analyze_single_file(path)?;
 let sources: &HashMap<PathBuf, String> = engine.sources();
 let extractions: &HashMap<PathBuf, FileExtraction> = engine.extractions();
 let graph: Option<&KnowledgeGraph> = engine.graph();
+
+// Workspace detection (automatic — populated after new() or full_analysis())
+let layout: Option<&WorkspaceLayout> = engine.workspace_layout();
+
+// Graph analysis (after extraction)
+let ctx: Option<AnalysisContext> = engine.run_graph_analysis();
+let ctx: Option<AnalysisContext> = engine.run_custom_analysis(pipeline);
 ```
 
 ### ExtractionResult
@@ -147,7 +177,7 @@ pub struct ExtractionResult {
 <type>(<scope>): <description>
 
 Types: feat, fix, refactor, docs, test, chore
-Scopes: parser, model, extractors, graph, diff, search, engine
+Scopes: parser, model, extractors, graph, diff, search, engine, workspace
 ```
 
 ---

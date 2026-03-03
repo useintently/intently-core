@@ -28,8 +28,7 @@ pub struct AstGrepLang(pub SupportedLanguage);
 
 impl Language for AstGrepLang {
     fn kind_to_id(&self, kind: &str) -> u16 {
-        self.get_ts_language()
-            .id_for_node_kind(kind, true)
+        self.get_ts_language().id_for_node_kind(kind, true)
     }
 
     fn field_to_id(&self, field: &str) -> Option<u16> {
@@ -289,14 +288,8 @@ function greet(name: string) {
             &test_path(),
         );
         assert_eq!(matches.len(), 2);
-        assert_eq!(
-            matches[0].captured_vars.get("METHOD").unwrap(),
-            "log"
-        );
-        assert_eq!(
-            matches[1].captured_vars.get("METHOD").unwrap(),
-            "warn"
-        );
+        assert_eq!(matches[0].captured_vars.get("METHOD").unwrap(), "log");
+        assert_eq!(matches[1].captured_vars.get("METHOD").unwrap(), "warn");
     }
 
     #[test]
@@ -313,10 +306,7 @@ def main():
             &PathBuf::from("test.py"),
         );
         assert_eq!(matches.len(), 1);
-        assert_eq!(
-            matches[0].captured_vars.get("ARG").unwrap(),
-            "result"
-        );
+        assert_eq!(matches[0].captured_vars.get("ARG").unwrap(), "result");
     }
 
     #[test]
@@ -360,7 +350,11 @@ app.post('/api/users', createUser);
         let engine = StructuralSearch::from_patterns(&patterns).unwrap();
 
         // Search a Python file — no TypeScript patterns should match
-        let matches = engine.search_file("print('hello')", SupportedLanguage::Python, &PathBuf::from("t.py"));
+        let matches = engine.search_file(
+            "print('hello')",
+            SupportedLanguage::Python,
+            &PathBuf::from("t.py"),
+        );
         assert!(matches.is_empty());
     }
 

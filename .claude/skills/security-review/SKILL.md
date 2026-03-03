@@ -1,78 +1,50 @@
+---
+name: reviewing-security
+description: Reviews security aspects of intently-core code. Checks for secrets in code and logs, input validation at boundaries, filesystem access scoping, dependency audit, unsafe code documentation, and error message safety. Use when changes touch extractors, Cargo.toml dependencies, error handling, unsafe blocks, or file system access.
+---
+
 # Security Review
 
-Security-focused review for the intently-core extraction library.
+## Critical rules
 
-## Trigger
+**ALWAYS:**
+- Run `cargo audit` on every dependency change — zero known vulnerabilities policy
+- Validate all file paths at public API boundaries — canonicalize and check against project root
+- Document every `unsafe` block with a `// SAFETY:` comment explaining invariants
+- Review new crate dependencies for: license compatibility (MIT/Apache 2.0), maintenance status, transitive deps
+- Verify error messages are safe for external consumers — no internal paths, no source code snippets
 
-Activate when PRs or changes touch:
-- Credential or secret pattern detection in extractors
-- Dependency updates (`Cargo.toml`, `Cargo.lock`)
-- Error handling or error message formatting
-- `unsafe` code blocks
-- File system access patterns
+**NEVER:**
+- Log, print, or include secrets (API keys, tokens, passwords) in error messages or tracing spans
+- Follow symlinks during file walking without explicit validation — path traversal vector
+- Accept a new `unsafe` block without a documented safe alternative that was considered and rejected
+- Add a dependency with GPL license to this MIT/Apache 2.0 library — license incompatibility
+- Expose internal file system structure (absolute paths, directory layout) in user-facing errors
 
-Keywords: "security review", "review security", "audit", "vulnerability", "secrets"
+## intently-core specific concerns
 
-## What This Skill Does
+- **Extractors detect PII/secrets** in analyzed code — the library itself must not leak data in its own errors or logs
+- **Filesystem access** must respect project root boundaries (no path traversal via malicious file paths)
+- **Error messages** must not expose internal paths, source code snippets, or system details
+- **Dependencies** are audited with `cargo audit` — new crates need license and supply chain review
 
-1. **Secrets in Code/Logs** — Scan for leaked credentials
-   - No API keys, tokens, passwords, or private keys in source code
-   - No secrets in log output (structured logging masks sensitive fields)
-   - `.env` files are in `.gitignore`
-   - No secrets in error messages
+## Checklist
 
-2. **Input Validation** — Verify boundary validation
-   - All external inputs (file paths, source code) are validated at entry
-   - Path inputs are canonicalized and checked
-   - No path traversal vectors in file walking
-   - Deserialization uses typed schemas
+- [ ] No secrets (API keys, tokens, passwords) in code, logs, or error messages
+- [ ] All external inputs validated at system boundaries (public API methods, file paths)
+- [ ] File operations scoped to project root, no symlink following without validation
+- [ ] `cargo audit` passes with no known vulnerabilities
+- [ ] No new `unsafe` without `// SAFETY:` documentation and justification
+- [ ] Error messages don't leak internal paths or system details
 
-3. **Filesystem Access** — Validate scope restrictions
-   - File operations respect project root boundaries
-   - No symlink following without validation
-   - Temporary files use secure creation (`tempfile` crate)
-   - Cleanup of temporary files is guaranteed
-
-4. **Dependency Audit** — Check third-party risk
-   - `cargo audit` passes with no known vulnerabilities
-   - No `unsafe` in dependencies without review
-   - License compatibility verified
-   - Transitive dependency tree is reasonable
-
-5. **Unsafe Code** — Review safety guarantees
-   - Every `unsafe` block has a `// SAFETY:` comment
-   - Invariants are documented and tested
-   - Prefer safe alternatives where possible
-
-## What to Check
-
-- [ ] No secrets in code, logs, or error messages
-- [ ] Input validation at all system boundaries
-- [ ] Filesystem access is scoped and safe
-- [ ] `cargo audit` passes
-- [ ] No new `unsafe` without SAFETY documentation
-- [ ] Error messages don't leak internal paths or details
-
-## Output Format
+## Output format
 
 ```
 ## Security Review: <scope>
 
-### Secrets Scan
-- [PASS/FAIL] <detail>
-
-### Input Validation
-- [PASS/FAIL] <detail>
-
-### Filesystem Access
-- [PASS/FAIL] <detail>
-
-### Dependency Audit
-- [PASS/FAIL] <detail>
-
-### Unsafe Code
-- [PASS/FAIL] <detail>
+### Findings
+- [PASS/FAIL] <category>: <detail>
 
 ### Verdict: APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION
-Severity: [CRITICAL/HIGH/MEDIUM/LOW/NONE]
+Severity: CRITICAL / HIGH / MEDIUM / LOW / NONE
 ```

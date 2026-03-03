@@ -7,7 +7,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `quality-gate` skill (`.claude/skills/quality-gate/`) — lightweight post-implementation verification running fmt, clippy, test, and CHANGELOG gates with PASS/FAIL per gate (no-ticket)
+- `implementation-playbook` rule (`.claude/rules/implementation-playbook.md`) — step-by-step process for implementing changes covering standard flow, test creation patterns, CHANGELOG conventions, commit format, common patterns (new field, new utility, public API change), and anti-patterns (no-ticket)
+
 ### Changed
+- `roadmap-high-level` skill (`.claude/skills/roadmap-high-level/`) — creates strategic roadmaps with 4-6 themed milestones, dependency mapping, ICE priority ranking, and state assessment grounded in CLAUDE.md/CHANGELOG/ADRs evidence
+- `roadmap-exec` skill (`.claude/skills/roadmap-exec/`) — decomposes a high-level theme or goal into ordered executable tasks with acceptance criteria, effort estimates (S/M/L/XL), dependencies, risk register, and milestone grouping — output feeds directly into task creation
+- Diverse real-world validation suite (`tests/diverse_validation.rs`): 130 repos across 13 language groups (10+ per language), table-driven with automatic disk cleanup via TempDir — TypeScript/JavaScript, Python, Java, Kotlin, C#, Go, PHP, Ruby, Rust, C, C++, Swift, Scala
+- Shared test helpers module (`tests/common/mod.rs`): extracted `clone_repo`, `analyze_repo`, `print_report`, and 21 assertion helpers for reuse across validation test files
+- `is_test: bool` field on `Symbol` — marks test functions/methods across 9 languages via `LanguageBehavior::is_test_symbol()`: naming conventions (Python `test_*`, Go `Test*`, Ruby `test_*`, PHP `test*`, TS/JS `test*`), annotations (Java `@Test`), attributes (Rust `#[test]`, C# `[Fact]`/`[Test]`/`[Theory]`) — BDD `describe`/`it` blocks are NOT detected (they're call_expressions, not function_declarations)
+- `total_test_symbols: usize` field on `CodeModelStats` — aggregated count of `is_test` symbols across all components
+- 14 new is_test detection unit tests (positive + negative for all 9 language families, from 460 to 474 unit tests)
+- `EnvDependency` struct for environment variable references — captures `var_name` + `SourceAnchor` per access site
+- `env_detection.rs` extractor module detecting env var patterns across 8 languages: `process.env.X` (TS/JS), `os.getenv()` / `os.environ[]` (Python), `os.Getenv()` (Go), `System.getenv()` (Java), `Environment.GetEnvironmentVariable()` (C#), `getenv()` / `env()` / `$_ENV[]` (PHP), `ENV[]` / `ENV.fetch()` (Ruby), `std::env::var()` / `env!()` (Rust) — dynamic access emits `var_name: "<dynamic>"`
+- `env_dependencies: Vec<EnvDependency>` on `FileExtraction` and `Component` — flows through extraction pipeline and builder aggregation
+- `total_env_dependencies: usize` on `CodeModelStats` — aggregated count across all components
+- `EnvDependency` re-exported from public API
+- 17 new env detection unit tests (per-language positive tests + edge cases, from 474 to 491 unit tests)
+- `ParameterLocation` enum (`Path`, `Query`, `Header`, `Body`) and `RouteParameter` struct — typed route parameter representation with optional type annotation
+- `parameters: Vec<RouteParameter>`, `handler_name: Option<String>`, `request_body_type: Option<String>` on `Interface` — enriches route definitions with path params, handler function names, and request body types (all optional, backward compatible via serde defaults)
+- `extract_path_params(route_path)` shared utility in `common.rs` — parses `:param` (Express/Gin/Rails), `{param}` (FastAPI/Spring/ASP.NET/Laravel), and `<param>` (Flask) path parameter styles
+- Path parameter extraction wired into all 7 language extractors (TypeScript, Python, Go, Java, C#, PHP, Ruby) — every extracted Interface now includes parsed route parameters
+- Handler name extraction for Express (last call arg), NestJS (method name), FastAPI/Flask (decorated function name), Go Gin/Echo (last call arg), Spring Boot (method name), ASP.NET (method name), Rails (action from `to:` arg)
+- `ParameterLocation`, `RouteParameter` re-exported from public API
+- 8 new `extract_path_params` unit tests (colon, curly, Flask angle bracket, constraints, dedup, mixed styles)
+- `GitFileMetadata` struct — per-file git metadata (last modified, last author, commit count, distinct authors) for churn and ownership analysis
+- `GitStats` struct — repository-level aggregate statistics (total authors, total commits, avg commits per file, top 10 hottest files by churn)
+- `git_metadata: Option<GitFileMetadata>` on `FileExtraction` — populated when `git` feature is enabled and project is inside a git repository
+- `git_stats: Option<GitStats>` on `CodeModelStats` — aggregate churn statistics computed from per-file metadata
+- `git` Cargo feature flag — enables git metadata collection via `git log` (requires `git` on PATH), walks up to 1000 commits from HEAD, graceful degradation when not in a git repo
+- `git/metadata.rs` module — `compute_git_metadata()` and `compute_git_stats()` functions behind `#[cfg(feature = "git")]`
+- `GitFileMetadata`, `GitStats` re-exported from public API
+- 9 new git metadata unit tests (parsing, aggregation, edge cases) + 1 ignored integration test against own repo
+- 3 new monorepo test fixtures: `npm_monorepo/` (npm workspace, 2 TS/Express packages), `go_workspace/` (Go workspace, 2 Gin modules), `uv_workspace/` (uv workspace, 2 FastAPI packages) — exercises all 5 workspace detection paths end-to-end
+- `analyze_fixtures` example binary (`cargo run --example analyze_fixtures`) — runs IntentlyEngine on all fixtures, outputs per-fixture JSON + summary table to stderr, supports single-fixture filter and `--summary` mode
+- 9 new integration tests: 3 per new monorepo fixture (component detection, workspace kind, route/symbol extraction) — from 534 to 543 total tests
+- `CodeModel::filtered(min_confidence)` — returns a filtered copy with only references at or above the confidence threshold, recalculates stats and filters directory dependencies
+- `Reference.is_test_reference` boolean field — `true` when source file has `FileRole::Test` and target file does not, enabling downstream consumers to separate test→production edges from production architecture
+- Test→production reference tagging in `CodeModelBuilder` after import resolution — automatically classifies cross-boundary references during model build
+- 12 new tests: 7 unit tests for `filtered()` and `is_test_reference` serde, 3 unit tests for builder tagging logic, 2 integration tests for pipeline-level validation (from 522 to 534 total)
+- `FileTree` hierarchical directory structure in `CodeModel` — recursive `DirectoryNode` with files, subdirectories, role classification, and aggregated stats
+- `DirectoryRole` enum (Source, Test, Config, Documentation, Generated, Build, Mixed) inferred by majority vote of direct file roles
+- `DirectoryStats` per-directory metrics: direct/total file count, estimated tokens, languages, depth
+- `FileEntry` lightweight file summary within directory nodes
+- Inter-directory dependency analysis: `DirectoryDependency` with reference count, avg/max confidence from resolved `Reference` data
+- `total_directories` field on `CodeModelStats`
+- Re-exported `FileTree`, `DirectoryNode`, `DirectoryRole`, `DirectoryStats`, `DirectoryDependency`, `FileEntry` from public API
+- 18 new file tree unit tests + 2 integration tests
+- Workspace detection for pnpm, npm/yarn, Cargo, Go, and uv monorepos — automatically discovers sub-packages from manifest files
+- Multi-component `CodeModel`: one `Component` per workspace package with per-package import resolution and module inference
+- `WorkspaceLayout`, `WorkspaceKind`, `WorkspacePackage` public types for downstream consumers
+- `IntentlyEngine::workspace_layout()` accessor — returns detected workspace layout or `None` for single-project repos
+- `CodeModelBuilder::set_file_in_component()` for routing extractions to named components
+- `CodeModelBuilder::set_component_root()` for per-package import resolution roots
+- `toml`, `serde_yaml`, `glob` dependencies for manifest parsing
+- `IntentlyError::WorkspaceDetection` error variant for typed workspace parse failures
+- 2 new monorepo test fixtures: `pnpm_monorepo/` (2 TS packages) and `cargo_monorepo/` (2 Rust crates)
+- 28 new tests: 19 workspace detection unit tests, 4 builder multi-component tests, 5 monorepo integration tests (from 474 to 502 total)
+- `FileRole` enum with `from_path()` heuristic classification: Generated > Test > Documentation > Build > Config > Implementation > Other
+- Token estimation (`estimate_tokens()`) using `bytes / 4` heuristic on `FileExtraction`
+- `TokenBudget` struct for downstream token budget enforcement
+- SHA-256 content fingerprinting on `FileExtraction.content_hash` via `sha2` crate — enables cache invalidation
+- `file_roles` breakdown and `total_estimated_tokens` in `CodeModelStats`
+- Re-exported `FileRole`, `TokenBudget`, `estimate_tokens` from `lib.rs` public API
+- 14 new unit tests for FileRole classification, token estimation, content hashing, and stats aggregation
+- Real-world validation tests for Cargo workspace (`tokio-rs/console`) and pnpm workspace (`drizzle-team/drizzle-orm`) detection
+- Real-world validation test for incremental pipeline with semantic diff on modified route files
+- Real-world validation test for ast-grep structural search (`require()` pattern matching on real code)
+- `assert_stats_populated` and `assert_content_hashes_present` assertion helpers in real-world validation harness
+- Real-world validation: npm workspace test (`calcom/cal.com`) and Go workspace test (`uber-go/nilaway`) — covers 4 of 5 workspace formats end-to-end
+- Real-world validation: medium-to-large repo tests — `saleor/saleor` (Python/Django, ~1500 files) and `spring-projects/spring-boot` (Java framework)
+- Real-world validation: Python import stress tests — `Textualize/rich` (heavy relative imports) and `httpie/cli` (moderate imports) validating `ImportBased` and `External` resolution methods
+- Real-world validation: Phase 3 feature tests — env dependencies (FastAPI), test symbols (Spring PetClinic), enriched routes (Express + Spring) validating `EnvDependency`, `is_test`, `handler_name`, and `RouteParameter` extraction on real codebases
+- Real-world validation: `summary_workspace_formats` and `summary_phase3_features` summary tables for workspace and Phase 3 coverage reporting
+- 7 new assertion helpers in real-world validation harness: `assert_has_env_dependencies`, `assert_has_test_symbols`, `assert_has_enriched_routes`, `assert_has_import_based_references`, `assert_has_external_references`, `assert_resolution_distribution_has`, `assert_workspace_layout`
+- Real-world validation: diverse framework tests — Next.js (`calcom/cal.com` apps/web, `t3-oss/create-t3-app`), Vite (`vitejs/vite`), Remix (`remix-run/indie-stack`), eShopOnWeb (ASP.NET reference architecture), Gitea (large Go), Django framework (large Python), Laravel framework (large PHP), Rails framework (large Ruby)
+- Real-world validation: large-scale stress testing — Django (3006 files, 42K symbols, 223K refs), Rails (3452 files, 47K symbols, 292K refs), Gitea (3045 files, 17K symbols, 145K refs), cal.com workspace (7407 files, 219 packages, 306K refs)
+- `# Examples` doc sections on 5 key public functions: `IntentlyEngine::new()`, `full_analysis()`, `KnowledgeGraph::from_code_model()`, `impact_analysis()`, `AnalysisPipeline::standard()`
+- Module-level `//!` documentation on `src/model/mod.rs` describing all 11 submodules
+- GitHub Actions CI workflow: formatting, clippy (default + git features), test matrix (unit, unit+git, integration, doc), coverage with 75% threshold
+- 6 new `module_inference` edge case tests: empty inputs, deep nesting, import-only files, self-dependency exclusion, dedup, root module
+- 6 new `diff` edge case tests: dependency add/remove, simultaneous changes, auth risk, removed PII risk, empty models
+- `resolution_method_distribution: HashMap<String, usize>` on `CodeModelStats` — breakdown of references by resolution method (import_based, same_file, global_unique, global_ambiguous, unresolved) for diagnosing resolution quality
+- `ResolutionMethod::as_str()` method — returns snake_case label consistent with serde serialization
+- Resolution method distribution displayed in `analyze_project` example output under avg confidence line
+- 3 new unit tests: `resolution_method_as_str_returns_snake_case`, `total_imports_counts_import_references`, `resolution_method_distribution_is_populated`
+- `ResolutionMethod::GlobalSameDir` variant — disambiguates same-directory preference (0.60 confidence) from generic `GlobalAmbiguous` (0.40), giving the resolution method distribution finer granularity
+- `ResolutionMethod::External` variant — classifies non-project imports (stdlib, third-party packages) as external (0.60 confidence) instead of lumping them with truly `Unresolved` (0.0)
+- Python import extraction in `python.rs`: `import os`, `import torch.nn as nn`, `from fastapi import FastAPI, Depends`, `from . import views`, `from ..utils import helper`, `from os.path import *` — covers all 4 Python import forms (simple, dotted, from-import, wildcard)
+- Python relative import normalization in `import_resolver.rs`: converts Python dot-prefix (`.`, `..utils`, `...core`) to JS-style paths (`./`, `../utils`, `../../core`) for unified resolution
+- `LanguageBehavior::is_stdlib_module()` trait method — per-language standard library classification, implemented for Python with 130 CPython 3.12 modules
+- `python_imports/` integration test fixture (5 Python files) exercising stdlib, third-party, and relative import patterns end-to-end
+- 4 new Python import integration tests: import extraction, stdlib-as-External classification, relative import resolution, resolution method distribution
+- 11 new `normalize_python_relative` unit tests + 2 end-to-end resolution tests in `import_resolver.rs`
+- 3 new `is_stdlib_module` tests in `language_behavior.rs`: Python stdlib, third-party rejection, cross-language default
+- 9 new Python import extraction unit tests in `python.rs`: simple, dotted, aliased, from-import, relative, wildcard, multi-file
+
+### Fixed
+- `total_imports` stat now counts `ReferenceKind::Import` references instead of `ImportInfo` entries — previously only the TypeScript extractor populated `ImportInfo`, causing `total_imports=0` for all other languages despite having import references in the graph
+- Relative import resolution now works with absolute file paths — `resolve_relative_path()` tries both the normalized (absolute) and project-relative candidate paths, fixing a bug where resolution always failed in integration/production mode because `file_symbols` had absolute keys
+- Removed redundant stable sort on 1.28M+ references in `resolve_all_references()` — the caller (`build_component`) already applies the final sort, saving ~2-3 seconds on large projects like PyTorch
+- Python route extraction: `@patch("module.path")` from `unittest.mock` no longer detected as HTTP PATCH routes — added object whitelist (`app`, `router`, `api`, etc.) and path validation (must start with `/`)
+- Python Django extraction: `path("bin/script.py")` utility calls no longer detected as Django URL patterns — added minimum 2 positional arguments check and file extension rejection
+- `analyze_project` example for analyzing any project directory (`cargo run --example analyze_project -- /path/to/project`)
+- 4 new regression tests for Python false positive prevention (mock.patch, bare path(), non-router decorators, Django with view handler)
+
+### Changed
+- `analyze_project` example: renamed "File Roles" section header to "Analyzed File Roles" — clarifies that only files passing `detect_language()` (16 programming languages) are included, not all project files
+- Refactored `graph.rs` (1,989 lines) into `graph/` submodule with `types.rs`, `construction.rs`, `analysis.rs` — improved maintainability with zero behavioral changes, all import paths preserved via re-exports
+- `CodeModel` now includes `file_tree: Option<FileTree>` field — built automatically during `CodeModelBuilder::build()`
+- `CodeModelBuilder` accepts optional `WorkspaceLayout` via `set_workspace_layout()` for component-aware file tree construction
+- `CodeModelBuilder` refactored from flat `HashMap<PathBuf, FileContribution>` to per-component `HashMap<String, ComponentState>` — single-project output is structurally identical (backward compatible)
+- `CodeModelBuilder::build()` now runs import resolution and module inference per-component using each package's own root path
+- `CodeModelBuilder::remove_file()` now searches across all components
+- `IntentlyEngine::full_analysis()` and `on_file_changed()` route files to correct workspace component via longest-prefix matching
+- Real-world validation helpers refactored to support multi-component CodeModel — `flat_map()` across all components instead of hardcoded `components[0]`
 - Renamed `SystemTwin` to `CodeModel` — more precise name for a semantic snapshot (not a live mirror)
 - Renamed module `twin/` to `model/`, `TwinBuilder` to `CodeModelBuilder`, `TwinStats` to `CodeModelStats`
 - Renamed `ExtractionResult.twin` field to `ExtractionResult.model`
@@ -27,10 +142,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `regex` dependency (was only used by policy engine)
 - `.claude/` cleanup: removed 4 rules (devops-ci, frontend, tauri, schema), 7 skills (policy/evidence/intent/frontend/tauri-ipc/task-protocol/ci review), 4 agents (priya/jun/dara/maren), 3 hooks (crate-boundary-guard, protect-schemas, intent-guard)
 - Removed npm/npx/pnpm/vitest/cargo-tauri/wasm-pack/trunk from allowed permissions
-- MCP server (`intently_mcp`) — moved to separate repository
-- Cross-language policy verification integration tests (belong in policy crate)
-- `regex` dependency (was only used by policy engine)
-
 ### Added
 - Realtime code analysis engine with <250ms incremental analysis target
 - Multi-language parser supporting 16 languages: TypeScript, TSX, JavaScript, JSX, Python, Java, C#, Go, Rust, PHP, Ruby, Kotlin, Swift, C, C++, Scala
@@ -55,10 +166,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JSON-RPC 2.0 server over stdin/stdout for IDE integration
 - CLI binary with debounced event loop (50ms window) using crossbeam channels
 - C# `ILogger<T>` log methods (`LogInformation`, `LogWarning`, `LogError`, `LogDebug`, `LogTrace`, `LogCritical`) added to log sink detection patterns
-- 15 multi-file e-commerce fixture projects (56 files total) covering all 16 supported languages for integration testing
-- 23 integration tests exercising full extraction pipeline across Express, FastAPI, Flask, Django, Spring Boot, Kotlin Spring, ASP.NET Core, Gin, Echo, net/http, Laravel, Rails, and generic fallback languages
+- 20 multi-file fixture projects (61 files total) covering all 16 supported languages for integration testing
+- 21 integration tests exercising full extraction pipeline across Express, NestJS, FastAPI, Flask, Django, Spring Boot, Kotlin Spring, ASP.NET Core (controllers + Minimal API), Gin, Echo, net/http, Laravel (including resource routes), Rails, and generic fallback languages
 - Cross-language policy verification tests (SEC-001, SEC-002, REL-001) validating policy engine against real fixture projects
-- 213 total tests (183 unit + 23 integration + 7 CLI) covering all modules including 7 dedicated backend framework extractors
+- 330 total tests (309 unit + 21 integration + 20 ignored real-world) covering all modules including 7 dedicated backend framework extractors
 - Incremental tree-sitter parsing with `InputEdit` computation via `similar` crate byte-level diffing — reduces re-parse time from O(file_size) to O(edit_size)
 - Tree cache (`HashMap<PathBuf, tree_sitter::Tree>`) in `IntentlyEngine` for storing parsed CSTs across changes
 - Per-file SEC-003 secret scanning cache — only re-scans changed files instead of entire codebase on every change
@@ -91,7 +202,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `references`, `data_models`, `module_boundaries` fields on `Component` and `FileExtraction`
 - `total_references`, `total_data_models`, `total_modules` fields on `TwinStats`
 - `ast-grep-core` integration for YAML-based structural code search patterns
-- 479 total test runs (7 CLI + 335 core unit + 23 integration + 57 MCP unit + 57 MCP integration)
+- NestJS integration test fixture (`tests/fixtures/nestjs_api/`) with 4 controller/service files exercising decorator-based routing, class-level `@UseGuards`, and path composition
+- ASP.NET Minimal API integration test fixture (`tests/fixtures/aspnet_ecommerce/Program.cs`) exercising `MapGet`/`MapPost`/`MapDelete` with `.RequireAuthorization()` chaining
+- Laravel integration test fixture extended with `Route::resource()`, `Route::apiResource()`, and `Route::any()` patterns
 - Real-world validation harness: 20 `#[ignore]` integration tests cloning 22 GitHub projects across all 16 supported languages, validating extraction on real codebases with automatic cleanup via `TempDir`
 - ADR-001: Extractor gaps documentation from real-world MCP validation against 8 GitHub repos — 6 gaps identified with priority matrix (ADR-001)
 - NestJS decorator-based routing: `@Controller`, `@Get`/`@Post`/`@Put`/`@Delete`/`@Patch`/`@Options`/`@Head`/`@All` with path composition and `@UseGuards` auth detection (ADR-001 GAP-01)
@@ -135,6 +248,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Component` struct now includes `imports: Vec<ImportInfo>` (previously dropped during twin build)
 - `TwinStats` struct now includes `total_imports: usize` field
 - Workspace expanded to 3 crates: `intently_core`, `intently_cli`, `intently_mcp`
+- Updated tree-sitter grammars to latest patch versions: java 0.23→0.23.5, c-sharp 0.23→0.23.1, ruby 0.23→0.23.1, cpp 0.23→0.23.4, swift 0.7→0.7.1, php 0.24→0.24.2
+- Integration test suite expanded from 20 to 21 tests with addition of NestJS decorator routing test
+- ASP.NET integration test now validates Minimal API endpoints (`/health`, `/api/v1/catalog/categories`, `/api/v1/catalog/import`, `/api/v1/cache/{key}`) alongside controller routes
+- Laravel integration test now validates `Route::resource()` (7 expanded routes), `Route::apiResource()` (5 expanded routes), and `Route::any()` with `HttpMethod::All`
 
 ### Fixed
 - NestJS projects now produce endpoints instead of 0 — full decorator-based routing extraction (ADR-001 GAP-01)
@@ -143,6 +260,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Laravel `Route::resource()` and `Route::apiResource()` now expand to 7/5 routes instead of being silently skipped (ADR-001 GAP-05)
 - C# `record` types now detected in symbol extraction — previously returned 0 symbols for modern C# files (ADR-001 GAP-04)
 - Health scores no longer show 100% when extraction fails completely — `confidence` field reveals extraction quality (ADR-001 GAP-06)
+
+### Added (Open Source Learnings)
+- `ResolutionMethod` enum on `Reference` with 5 variants: `ImportBased`, `SameFile`, `GlobalUnique`, `GlobalAmbiguous`, `Unresolved` — enables consumers to filter by resolution quality
+- `confidence: f64` field on `Reference` (0.0–1.0) scoring how reliably the target was resolved
+- `WeightedEdge` type wrapping `GraphEdge` with confidence — structural edges get 1.0, reference-derived edges inherit resolver confidence
+- Confidence-weighted impact analysis: BFS accumulates cumulative confidence along paths, pruning below 0.1 threshold
+- Two-level `SymbolTable`: per-file exact lookup + global fuzzy lookup with 6-level heuristic resolution chain (import→same-file→global-unique→same-directory→ambiguous→unresolved)
+- `LanguageBehavior` trait with 9 language-family implementations — replaces scattered `match language` blocks for visibility, signatures, doc comments, and parent resolution
+- Composable graph analysis pipeline: `GraphAnalyzer` trait + `AnalysisPipeline` with 4 standard passes
+- `DegreeCentralityAnalyzer`: per-node in/out degree computation sorted by out-degree
+- `EntryPointDetector`: 3-strategy detection — HTTP endpoints, high fan-out/low fan-in ratio, name patterns (main, handler, controller, etc.)
+- `ProcessFlowDetector`: DFS traces from entry points through Calls edges with max depth 15, cycle-safe via visited set, flow deduplication
+- `CycleAnalyzer`: wraps `KnowledgeGraph::find_cycles()` into composable analyzer trait
+- `run_graph_analysis()` and `run_custom_analysis()` methods on `IntentlyEngine` for standard and custom analysis pipelines
+- Chunked parallel extraction in engine: files processed in batches of 500 to bound peak memory
+- Thread-local parser caches: `parse_source_cached()` reuses tree-sitter `Parser` instances per rayon thread
+- Tracing sub-spans for pipeline phases: `discover_files`, `parse_and_extract`, `build_model`, `build_graph`
+- Atomic state updates in `CodeModelBuilder`: `update_file()` with closure-based load-modify-save preserving previous state on error
+- Zero-copy string utilities: `node_text_ref()` and `strip_quotes_ref()` in extractors — 30 call sites migrated to avoid unnecessary String allocations
+- `CodeModelStats::default()` derives `Default` for zero-valued construction
+- `resolved_references` and `avg_resolution_confidence` fields on `CodeModelStats`
+- `GraphNode` helper methods: `is_symbol()`, `is_interface()`, `is_external()`
+- `KnowledgeGraph` pub(crate) accessors: `node_iter()`, `node_degree()`, `node()`, `edges_filtered()`
+- Integration test: `express_ecommerce_graph_analysis_pipeline` validating full analysis pipeline
+- 65 new tests across all new modules (from 330 to 417 total: 395 unit + 22 integration)
+
+### Changed (Open Source Learnings)
+- `KnowledgeGraph` internal edge type changed from `DiGraph<GraphNode, GraphEdge>` to `DiGraph<GraphNode, WeightedEdge>` — structural edges carry confidence 1.0, reference-derived edges inherit from resolver
+- `AffectedNode` now includes `confidence: f64` field (cumulative path confidence)
+- `Reference` derives `PartialEq` only (not `Eq`) due to `f64` confidence field
+- `symbols.rs` refactored from ~450 lines of `match language` blocks to `LanguageBehavior` trait dispatch (~300 lines removed)
+- `call_graph.rs` and `generic.rs` use `LanguageBehavior::call_node_kinds()` instead of deprecated `is_call_node()`
+- `is_call_node()` in `common.rs` marked `#[deprecated]` — use `LanguageBehavior::call_node_kinds()` instead
+- `import_resolver.rs` extended with `resolve_all_references()` setting confidence and resolution_method on resolved references
+- `to_json()` on `KnowledgeGraph` now includes edge confidence in output
 
 ### Known Gaps
 - Route group prefix resolution missing for Go Gin `r.Group()`, PHP Laravel `Route::prefix()->group()`, C# `MapGroup()` (ADR-001 GAP-02 partial)

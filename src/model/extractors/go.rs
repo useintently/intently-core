@@ -15,11 +15,13 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::patterns;
 use crate::model::types::*;
+use crate::parser::SupportedLanguage;
 
-use super::common::{self, anchor_from_node, extract_string_value, node_text, truncate_call_text};
+use super::common::{
+    self, anchor_from_node, extract_string_value, node_text, node_text_ref, truncate_call_text,
+};
 
 /// Go HTTP route methods (uppercase — Gin/Echo convention).
 const GO_ROUTE_METHODS: &[&str] = &[
@@ -41,12 +43,7 @@ pub fn extract(
     extraction
 }
 
-fn extract_recursive(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     if node.kind() == "call_expression" {
         try_extract_route(node, source, file_path, extraction);
         try_extract_http_call(node, source, file_path, extraction);
@@ -67,12 +64,7 @@ fn extract_recursive(
 /// - `r.GET("/users", handler)` — Gin/Echo
 /// - `r.POST("/orders", authMiddleware, handler)` — Gin with middleware
 /// - `http.HandleFunc("/path", handler)` — net/http
-fn try_extract_route(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn try_extract_route(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     let function = match node.child_by_field_name("function") {
         Some(f) => f,
         None => return,
@@ -97,7 +89,7 @@ fn try_extract_gin_route(
         None => return,
     };
 
-    let method_name = node_text(&field, source);
+    let method_name = node_text_ref(&field, source);
 
     // Check for HandleFunc (net/http)
     if method_name == "HandleFunc" || method_name == "Handle" {
@@ -106,14 +98,14 @@ fn try_extract_gin_route(
     }
 
     // Check for Gin/Echo route methods
-    if !GO_ROUTE_METHODS.contains(&method_name.as_str()) {
+    if !GO_ROUTE_METHODS.contains(&method_name) {
         return;
     }
 
     let http_method = if method_name == "Any" {
         HttpMethod::All
     } else {
-        match common::parse_http_method(&method_name) {
+        match common::parse_http_method(method_name) {
             Some(m) => m,
             None => return,
         }
@@ -149,11 +141,20 @@ fn try_extract_gin_route(
         None
     };
 
+    // Extract handler name from the last argument (e.g., `listUsers` in `r.GET("/users", listUsers)`)
+    let handler_name = arg_texts
+        .last()
+        .map(|t| common::strip_quotes_ref(t).to_string())
+        .filter(|name| !name.is_empty() && !name.starts_with("func("));
+
     extraction.interfaces.push(Interface {
         method: http_method,
-        path: route_path,
+        path: route_path.clone(),
         auth,
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&route_path),
+        handler_name,
+        request_body_type: None,
     });
 }
 
@@ -173,11 +174,20 @@ fn try_extract_net_http_route(
     if let Some(first_arg) = args.named_child(0) {
         let text = node_text(&first_arg, source);
         if let Some(path) = extract_string_value(&text) {
+            // Second argument is the handler function
+            let handler_name = args
+                .named_child(1)
+                .map(|h| node_text_ref(&h, source).to_string())
+                .filter(|name| !name.is_empty() && !name.starts_with("func("));
+
             extraction.interfaces.push(Interface {
                 method: HttpMethod::All,
-                path,
+                path: path.clone(),
                 auth: None,
                 anchor: anchor_from_node(node, file_path),
+                parameters: common::extract_path_params(&path),
+                handler_name,
+                request_body_type: None,
             });
         }
     }
@@ -206,22 +216,21 @@ fn try_extract_http_call(
     };
 
     let operand = match function.child_by_field_name("operand") {
-        Some(o) => node_text(&o, source),
+        Some(o) => node_text_ref(&o, source),
         None => return,
     };
 
     let field = match function.child_by_field_name("field") {
-        Some(f) => node_text(&f, source),
+        Some(f) => node_text_ref(&f, source),
         None => return,
     };
 
     // http.Get, http.Post, http.Head
-    let is_std_http = operand == "http"
-        && matches!(field.as_str(), "Get" | "Post" | "Head" | "NewRequest");
+    let is_std_http = operand == "http" && matches!(field, "Get" | "Post" | "Head" | "NewRequest");
 
     // client.Do, client.Get, etc.
     let is_client = (operand.ends_with("client") || operand.ends_with("Client"))
-        && matches!(field.as_str(), "Do" | "Get" | "Post" | "Head");
+        && matches!(field, "Do" | "Get" | "Post" | "Head");
 
     // resty.R().Get, etc.
     let is_resty = operand == "resty" || field == "Execute";
@@ -249,21 +258,22 @@ mod tests {
 
     fn extract_go(source: &str) -> FileExtraction {
         let path = PathBuf::from("main.go");
-        let parsed =
-            parser::parse_source(&path, source, SupportedLanguage::Go, None).unwrap();
+        let parsed = parser::parse_source(&path, source, SupportedLanguage::Go, None).unwrap();
         extract(&path, source, &parsed.tree, SupportedLanguage::Go)
     }
 
     #[test]
     fn extracts_gin_get_route() {
-        let ext = extract_go(r#"
+        let ext = extract_go(
+            r#"
 package main
 
 func main() {
     r := gin.Default()
     r.GET("/users", listUsers)
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/users");
@@ -271,14 +281,16 @@ func main() {
 
     #[test]
     fn extracts_gin_post_with_auth_middleware() {
-        let ext = extract_go(r#"
+        let ext = extract_go(
+            r#"
 package main
 
 func main() {
     r := gin.Default()
     r.POST("/api/orders", authMiddleware, createOrder)
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Post);
         assert!(ext.interfaces[0].auth.is_some());
@@ -286,7 +298,8 @@ func main() {
 
     #[test]
     fn extracts_net_http_handle_func() {
-        let ext = extract_go(r#"
+        let ext = extract_go(
+            r#"
 package main
 
 import "net/http"
@@ -294,7 +307,8 @@ import "net/http"
 func main() {
     http.HandleFunc("/api/data", dataHandler)
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::All);
         assert_eq!(ext.interfaces[0].path, "/api/data");
@@ -302,7 +316,8 @@ func main() {
 
     #[test]
     fn extracts_http_get_call() {
-        let ext = extract_go(r#"
+        let ext = extract_go(
+            r#"
 package main
 
 import "net/http"
@@ -312,42 +327,51 @@ func fetch() {
     _ = resp
     _ = err
 }
-"#);
+"#,
+        );
         assert_eq!(ext.dependencies.len(), 1);
-        assert_eq!(ext.dependencies[0].dependency_type, DependencyType::HttpCall);
+        assert_eq!(
+            ext.dependencies[0].dependency_type,
+            DependencyType::HttpCall
+        );
     }
 
     #[test]
     fn no_auth_when_no_middleware() {
-        let ext = extract_go(r#"
+        let ext = extract_go(
+            r#"
 package main
 
 func main() {
     r := gin.Default()
     r.GET("/health", healthCheck)
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_none());
     }
 
     #[test]
     fn no_false_positives_on_regular_selectors() {
-        let ext = extract_go(r#"
+        let ext = extract_go(
+            r#"
 package main
 
 func main() {
     config.Set("key", "value")
     db.Query("SELECT 1")
 }
-"#);
+"#,
+        );
         assert!(ext.interfaces.is_empty());
         assert!(ext.dependencies.is_empty());
     }
 
     #[test]
     fn detects_pii_in_log() {
-        let ext = extract_go(r#"
+        let ext = extract_go(
+            r#"
 package main
 
 import "log"
@@ -355,13 +379,15 @@ import "log"
 func handle() {
     log.Printf("User email: %s", user.email)
 }
-"#);
+"#,
+        );
         assert!(ext.sinks.iter().any(|s| s.contains_pii));
     }
 
     #[test]
     fn realistic_gin_server() {
-        let ext = extract_go(r#"
+        let ext = extract_go(
+            r#"
 package main
 
 import (
@@ -385,7 +411,8 @@ func main() {
 
     r.GET("/api/users", listUsers)
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 3);
         assert!(ext.interfaces[0].auth.is_none()); // /health
         assert!(ext.interfaces[1].auth.is_some()); // /api/payments

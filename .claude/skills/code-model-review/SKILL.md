@@ -1,73 +1,51 @@
+---
+name: reviewing-code-model
+description: Reviews CodeModel (intermediate representation) changes in intently-core. Validates IR completeness, representation correctness, serialization round-tripping, incremental update behavior, and language-agnostic extensibility. Use when changes touch src/model/types.rs, src/model/builder.rs, CodeModel data structures, or serialization logic.
+---
+
 # CodeModel Review
 
-Review CodeModel (IR) implementation in Intently.
+## Critical rules
 
-## Trigger
+**ALWAYS:**
+- Attach a `SourceAnchor` (file, start/end line, start/end byte, node kind) to every extracted artifact
+- Use `update_file()` for incremental updates — only the changed file is reprocessed
+- Ensure serialization round-trips: `serialize → deserialize → serialize` must produce identical output
+- Keep the core IR language-agnostic — language-specific logic goes behind `LanguageBehavior` trait
+- Verify `CodeModel` output is deterministic: same input files must always produce the same model
 
-Activate when PRs or changes touch:
-- `crates/Intently_core/src/ir/` (any file)
-- IR data structures, serialization, or deserialization
-- `system_twin.json` schema definitions
+**NEVER:**
+- Trigger a full CodeModel rebuild on a single file change — always use incremental path
+- Break node identity on incremental updates — unchanged nodes must retain stable IDs (no spurious diffs)
+- Add language-specific fields to core IR types (`CodeModel`, `Component`, `Interface`) — extend via extractors
+- Modify `src/model/extractors/mod.rs` dispatch logic when adding a new extractor — register only
+- Skip `FileExtraction.content_hash` (SHA-256) — content fingerprinting is required for cache invalidation
 
-Keywords: "code model review", "IR review", "review IR", "review code model"
+## Key files
 
-## What This Skill Does
+- `src/model/types.rs` — CodeModel, FileExtraction, Component, Interface, SourceAnchor
+- `src/model/builder.rs` — CodeModelBuilder with incremental per-file updates
+- `src/model/graph/` — KnowledgeGraph (petgraph), WeightedEdge, impact analysis
+- `src/model/symbol_table.rs` — Two-level symbol table (per-file exact + global fuzzy)
+- `src/model/extractors/` — Language-specific extractors behind `LanguageBehavior` trait
 
-1. **IR Completeness** — Verify the IR captures all necessary information
-   - Components: functions, modules, types, traits, interfaces
-   - Dependencies: imports, calls, trait implementations, type references
-   - Contracts: input types, output types, error types, invariants
-   - Flows: control flow (branching, loops), data flow (assignments, transforms)
+## Checklist
 
-2. **Representation Correctness** — Validate IR accurately models source code
-   - IR nodes correctly map to source language constructs
-   - Relationships between nodes are bidirectional where appropriate
-   - Type information is preserved and queryable
+- [ ] CodeModel captures: components, interfaces (routes), dependencies, sinks, symbols, data models, imports, module boundaries
+- [ ] IR nodes correctly map to source language constructs via SourceAnchor (file, line, byte positions)
+- [ ] Serialization round-trips without data loss (serialize → deserialize → serialize = identical)
+- [ ] File change triggers partial rebuild via `update_file()`, not full rebuild
+- [ ] Unchanged nodes retain stable identity across incremental updates (no spurious diffs)
+- [ ] Language-specific logic is behind `LanguageBehavior` trait — core IR is language-agnostic
+- [ ] New extractors register in `src/model/extractors/mod.rs` dispatch — zero changes to engine
 
-3. **Schema Compliance** — Validate `system_twin.json` output
-   - Serialized IR is self-describing (includes schema version)
-   - All node types have unique, stable identifiers
-   - Deserialization round-trips correctly (serialize -> deserialize -> serialize = identical)
-
-4. **Incremental Updates** — Verify IR updates are incremental
-   - File change triggers partial IR rebuild, not full rebuild
-   - Affected subgraph is correctly identified and updated
-   - Unaffected nodes retain their identity (no spurious diffs)
-
-5. **Extensibility** — Check that new language support can be added
-   - Language-specific parsing is behind a trait/interface
-   - Core IR is language-agnostic
-   - Adding a new language does not require modifying existing IR code
-
-## What to Check
-
-- [ ] IR captures components, dependencies, contracts, and flows
-- [ ] IR nodes correctly represent source constructs
-- [ ] `system_twin.json` round-trips without data loss
-- [ ] Incremental update only rebuilds affected subgraph
-- [ ] Unchanged nodes retain stable identifiers across updates
-- [ ] Language-specific logic is behind a parser trait
-- [ ] Unit tests cover: parsing, serialization, incremental update, edge cases
-
-## Output Format
+## Output format
 
 ```
 ## CodeModel Review: <file_path>
 
-### IR Completeness
-- [PASS/FAIL] <detail>
-
-### Representation Correctness
-- [PASS/FAIL] <detail>
-
-### Schema Compliance
-- [PASS/FAIL] <detail>
-
-### Incremental Updates
-- [PASS/FAIL] <detail>
-
-### Extensibility
-- [PASS/FAIL] <detail>
+### Findings
+- [PASS/FAIL] <category>: <detail>
 
 ### Verdict: APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION
 ```

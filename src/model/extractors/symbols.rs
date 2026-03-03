@@ -16,14 +16,15 @@
 
 use std::path::Path;
 
-use tree_sitter::StreamingIterator;
 use tracing::warn;
+use tree_sitter::StreamingIterator;
 use tree_sitter::{Node, Tree};
 
+use crate::model::types::{Symbol, SymbolKind};
 use crate::parser::SupportedLanguage;
-use crate::model::types::{Symbol, SymbolKind, Visibility};
 
 use super::common::anchor_from_node;
+use super::language_behavior::behavior_for;
 
 // ---------------------------------------------------------------------------
 // Query patterns per language
@@ -148,6 +149,7 @@ pub fn extract_symbols(
         }
     };
 
+    let behavior = behavior_for(language);
     let mut cursor = tree_sitter::QueryCursor::new();
     let mut symbols = Vec::new();
 
@@ -175,10 +177,11 @@ pub fn extract_symbols(
         }
 
         if let (Some(name), Some(kind), Some(node)) = (sym_name, sym_kind, def_node) {
-            let signature = extract_signature(source, &node, language);
-            let visibility = extract_visibility(&node, source, language, Some(&name));
-            let parent = find_parent_name(&node, source, language);
-            let doc = extract_doc_comment(&node, source, language);
+            let signature = behavior.extract_signature(&node, source);
+            let visibility = behavior.parse_visibility(&node, source);
+            let parent = behavior.find_parent_name(&node, source);
+            let doc = behavior.extract_doc_comment(&node, source);
+            let is_test = behavior.is_test_symbol(&node, source, &name);
 
             symbols.push(Symbol {
                 name,
@@ -188,6 +191,7 @@ pub fn extract_symbols(
                 signature,
                 visibility,
                 parent,
+                is_test,
             });
         }
     }
@@ -205,478 +209,10 @@ pub fn extract_symbols(
     symbols
 }
 
-// ---------------------------------------------------------------------------
-// Signature extraction
-// ---------------------------------------------------------------------------
-
-/// Extract the declaration signature from a definition node.
-///
-/// Captures the text from the start of the node up to (but not including)
-/// the body opener (`{`, `:` for Python, or end of line for Ruby).
-fn extract_signature(source: &str, node: &Node, language: SupportedLanguage) -> Option<String> {
-    let node_text = node.utf8_text(source.as_bytes()).ok()?;
-
-    let truncated = match language {
-        SupportedLanguage::Python => {
-            // Python: truncate at the first `:` that ends the def/class line
-            truncate_at_char(node_text, ':')
-        }
-        SupportedLanguage::Ruby => {
-            // Ruby: take just the first line (def name(params))
-            node_text.lines().next().map(|l| l.to_string())
-        }
-        _ => {
-            // Most C-family languages: truncate at `{`
-            truncate_at_char(node_text, '{')
-        }
-    };
-
-    let sig = truncated
-        .as_deref()
-        .unwrap_or(node_text)
-        .trim()
-        .to_string();
-
-    if sig.is_empty() {
-        None
-    } else {
-        Some(sig)
-    }
-}
-
-/// Truncate text at the first occurrence of `ch`, trimming whitespace.
-fn truncate_at_char(text: &str, ch: char) -> Option<String> {
-    text.find(ch).map(|pos| text[..pos].trim().to_string())
-}
-
-// ---------------------------------------------------------------------------
-// Visibility extraction
-// ---------------------------------------------------------------------------
-
-/// Determine the visibility of a symbol from CST nodes or naming conventions.
-fn extract_visibility(
-    node: &Node,
-    source: &str,
-    language: SupportedLanguage,
-    name: Option<&str>,
-) -> Option<Visibility> {
-    match language {
-        SupportedLanguage::TypeScript
-        | SupportedLanguage::Tsx
-        | SupportedLanguage::Jsx
-        | SupportedLanguage::JavaScript => extract_visibility_ts(node, source),
-        SupportedLanguage::Python => extract_visibility_python(name),
-        SupportedLanguage::Java => extract_visibility_modifier_child(node, source),
-        SupportedLanguage::CSharp => extract_visibility_csharp(node, source),
-        SupportedLanguage::Go => extract_visibility_go(name),
-        SupportedLanguage::Rust => extract_visibility_rust(node),
-        SupportedLanguage::Php => extract_visibility_modifier_child(node, source),
-        // Ruby: visibility is complex (private/protected are method calls)
-        // — YAGNI, skip for now
-        _ => None,
-    }
-}
-
-/// TS/JS: check for `export` keyword in parent or sibling.
-fn extract_visibility_ts(node: &Node, source: &str) -> Option<Visibility> {
-    // Check if the node itself starts with "export"
-    let text = node.utf8_text(source.as_bytes()).ok()?;
-    if text.starts_with("export") {
-        return Some(Visibility::Public);
-    }
-    // Check parent for export_statement wrapping
-    if let Some(parent) = node.parent() {
-        let kind = parent.kind();
-        if kind == "export_statement" {
-            return Some(Visibility::Public);
-        }
-    }
-    None
-}
-
-/// Python: underscore naming convention.
-fn extract_visibility_python(name: Option<&str>) -> Option<Visibility> {
-    let n = name?;
-    if n.starts_with("__") && !n.ends_with("__") {
-        // Name-mangled: strongly private
-        Some(Visibility::Private)
-    } else if n.starts_with('_') {
-        // Convention: internal/private
-        Some(Visibility::Private)
-    } else {
-        Some(Visibility::Public)
-    }
-}
-
-/// Java/PHP: look for visibility modifier keywords in child nodes.
-fn extract_visibility_modifier_child(node: &Node, source: &str) -> Option<Visibility> {
-    // Check the node text directly for modifier keywords at the start
-    let text = node.utf8_text(source.as_bytes()).ok()?;
-    // Look for modifiers child node
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i as u32) {
-            let kind = child.kind();
-            if kind == "modifiers" || kind == "modifier" || kind == "visibility_modifier" {
-                let mod_text = child.utf8_text(source.as_bytes()).ok()?;
-                return parse_visibility_keyword(mod_text);
-            }
-            // Direct keyword nodes (some grammars use these)
-            if let Some(vis) = parse_visibility_keyword(kind) {
-                return Some(vis);
-            }
-        }
-    }
-    // Fallback: check if text starts with a visibility keyword
-    let first_word = text.split_whitespace().next()?;
-    parse_visibility_keyword(first_word)
-}
-
-/// C#: similar to Java but also has `internal`.
-fn extract_visibility_csharp(node: &Node, source: &str) -> Option<Visibility> {
-    let text = node.utf8_text(source.as_bytes()).ok()?;
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i as u32) {
-            let kind = child.kind();
-            if kind == "modifier" {
-                let mod_text = child.utf8_text(source.as_bytes()).ok()?;
-                return parse_visibility_keyword(mod_text);
-            }
-        }
-    }
-    let first_word = text.split_whitespace().next()?;
-    parse_visibility_keyword(first_word)
-}
-
-/// Go: capitalization convention.
-fn extract_visibility_go(name: Option<&str>) -> Option<Visibility> {
-    let n = name?;
-    let first_char = n.chars().next()?;
-    if first_char.is_uppercase() {
-        Some(Visibility::Public)
-    } else {
-        Some(Visibility::Private)
-    }
-}
-
-/// Rust: look for `visibility_modifier` child node (e.g., `pub`).
-fn extract_visibility_rust(node: &Node) -> Option<Visibility> {
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i as u32) {
-            if child.kind() == "visibility_modifier" {
-                return Some(Visibility::Public);
-            }
-        }
-    }
-    // No visibility modifier in Rust means private by default
-    Some(Visibility::Private)
-}
-
-/// Parse a visibility keyword string into Visibility.
-fn parse_visibility_keyword(keyword: &str) -> Option<Visibility> {
-    match keyword.trim() {
-        "public" => Some(Visibility::Public),
-        "private" => Some(Visibility::Private),
-        "protected" => Some(Visibility::Protected),
-        "internal" => Some(Visibility::Internal),
-        _ => None,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Doc comment extraction
-// ---------------------------------------------------------------------------
-
-/// Extract a doc comment from the sibling or child nodes of a definition.
-///
-/// Strategies per language:
-/// - C-family (TS, JS, Java, C#, PHP, Go): previous sibling `comment` starting with `/**` or `///`
-/// - Python: first child of body block is a string literal (docstring)
-/// - Rust: previous sibling `line_comment` starting with `///`
-/// - Ruby: previous sibling `comment` starting with `#`
-fn extract_doc_comment(node: &Node, source: &str, language: SupportedLanguage) -> Option<String> {
-    match language {
-        SupportedLanguage::Python => extract_python_docstring(node, source),
-        SupportedLanguage::Rust => extract_rust_doc_comment(node, source),
-        SupportedLanguage::Ruby => extract_hash_comment(node, source),
-        _ => extract_block_or_line_comment(node, source),
-    }
-}
-
-/// Find a comment node immediately preceding the given node.
-///
-/// Tries `prev_named_sibling()` first (works in most grammars), then falls
-/// back to walking `prev_sibling()` skipping whitespace-only unnamed nodes.
-fn find_preceding_comment<'a>(node: &Node<'a>) -> Option<Node<'a>> {
-    // Named sibling first
-    if let Some(sib) = node.prev_named_sibling() {
-        let kind = sib.kind();
-        if kind == "comment" || kind == "line_comment" || kind == "block_comment" {
-            return Some(sib);
-        }
-    }
-    // Walk unnamed siblings (comments are unnamed in some grammars like Java)
-    let mut sib = node.prev_sibling();
-    while let Some(s) = sib {
-        let kind = s.kind();
-        if kind == "comment" || kind == "line_comment" || kind == "block_comment" {
-            return Some(s);
-        }
-        // Skip whitespace/newlines between nodes
-        if !s.is_named() {
-            sib = s.prev_sibling();
-            continue;
-        }
-        // Hit a named non-comment node — stop
-        break;
-    }
-    None
-}
-
-/// Python: extract docstring from the first expression_statement in the body.
-fn extract_python_docstring(node: &Node, source: &str) -> Option<String> {
-    // Look for a block/body child, then check its first statement
-    for i in 0..node.named_child_count() {
-        if let Some(child) = node.named_child(i as u32) {
-            if child.kind() == "block" {
-                // First named child should be expression_statement with string
-                if let Some(first_stmt) = child.named_child(0) {
-                    if first_stmt.kind() == "expression_statement" {
-                        if let Some(str_node) = first_stmt.named_child(0) {
-                            if str_node.kind() == "string" || str_node.kind() == "concatenated_string" {
-                                let text = str_node.utf8_text(source.as_bytes()).ok()?;
-                                return Some(clean_python_docstring(text));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Rust: look for `///` line comments preceding the node.
-fn extract_rust_doc_comment(node: &Node, source: &str) -> Option<String> {
-    let mut comments = Vec::new();
-    let mut sibling = find_preceding_comment(node);
-    while let Some(sib) = sibling {
-        let kind = sib.kind();
-        if kind == "line_comment" || kind == "comment" {
-            let text = sib.utf8_text(source.as_bytes()).ok()?;
-            if text.starts_with("///") {
-                comments.push(text.trim_start_matches("///").trim().to_string());
-                sibling = find_preceding_comment(&sib);
-                continue;
-            }
-        }
-        break;
-    }
-    if comments.is_empty() {
-        return None;
-    }
-    comments.reverse();
-    Some(comments.join("\n"))
-}
-
-/// Ruby: look for `#` comments preceding the node.
-fn extract_hash_comment(node: &Node, source: &str) -> Option<String> {
-    let mut comments = Vec::new();
-    let mut sibling = find_preceding_comment(node);
-    while let Some(sib) = sibling {
-        if sib.kind() == "comment" {
-            let text = sib.utf8_text(source.as_bytes()).ok()?;
-            if text.starts_with('#') {
-                comments.push(text.trim_start_matches('#').trim().to_string());
-                sibling = find_preceding_comment(&sib);
-                continue;
-            }
-        }
-        break;
-    }
-    if comments.is_empty() {
-        return None;
-    }
-    comments.reverse();
-    Some(comments.join("\n"))
-}
-
-/// C-family languages: look for `/** ... */` or `///` comments preceding the node.
-fn extract_block_or_line_comment(node: &Node, source: &str) -> Option<String> {
-    // Try named sibling first, then unnamed (comments may be unnamed in some grammars)
-    let sibling = find_preceding_comment(node)?;
-    let kind = sibling.kind();
-    if kind != "comment" && kind != "line_comment" && kind != "block_comment" {
-        return None;
-    }
-    let text = sibling.utf8_text(source.as_bytes()).ok()?;
-
-    // JSDoc/JavaDoc style: /** ... */
-    if text.starts_with("/**") {
-        return Some(clean_block_comment(text));
-    }
-    // Triple-slash style: ///
-    if text.starts_with("///") {
-        // Collect consecutive /// comments
-        let mut comments = vec![text.trim_start_matches("///").trim().to_string()];
-        let mut sib = sibling.prev_named_sibling();
-        while let Some(s) = sib {
-            if s.kind() == "comment" || s.kind() == "line_comment" {
-                let t = s.utf8_text(source.as_bytes()).ok()?;
-                if t.starts_with("///") {
-                    comments.push(t.trim_start_matches("///").trim().to_string());
-                    sib = s.prev_named_sibling();
-                    continue;
-                }
-            }
-            break;
-        }
-        comments.reverse();
-        return Some(comments.join("\n"));
-    }
-    // Go: single-line // comments (convention)
-    if text.starts_with("//") {
-        let mut comments = vec![text.trim_start_matches("//").trim().to_string()];
-        let mut sib = sibling.prev_named_sibling();
-        while let Some(s) = sib {
-            if s.kind() == "comment" {
-                let t = s.utf8_text(source.as_bytes()).ok()?;
-                if t.starts_with("//") {
-                    comments.push(t.trim_start_matches("//").trim().to_string());
-                    sib = s.prev_named_sibling();
-                    continue;
-                }
-            }
-            break;
-        }
-        comments.reverse();
-        return Some(comments.join("\n"));
-    }
-
-    None
-}
-
-/// Clean a `/** ... */` block comment.
-fn clean_block_comment(text: &str) -> String {
-    let trimmed = text
-        .trim_start_matches("/**")
-        .trim_end_matches("*/")
-        .trim();
-    trimmed
-        .lines()
-        .map(|line| line.trim().trim_start_matches('*').trim())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Clean a Python docstring (`"""..."""` or `'''...'''`).
-fn clean_python_docstring(text: &str) -> String {
-    let inner = text
-        .trim_start_matches("\"\"\"")
-        .trim_start_matches("'''")
-        .trim_end_matches("\"\"\"")
-        .trim_end_matches("'''")
-        .trim();
-    inner
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-// ---------------------------------------------------------------------------
-// Parent extraction
-// ---------------------------------------------------------------------------
-
-/// Walk up the CST to find the enclosing class/module/trait/impl name.
-fn find_parent_name(node: &Node, source: &str, language: SupportedLanguage) -> Option<String> {
-    match language {
-        SupportedLanguage::Go => find_parent_go(node, source),
-        _ => find_parent_generic(node, source, language),
-    }
-}
-
-/// Generic parent finder: walk up looking for class/module/trait/impl nodes.
-fn find_parent_generic(node: &Node, source: &str, _language: SupportedLanguage) -> Option<String> {
-    let mut current = node.parent()?;
-    loop {
-        let kind = current.kind();
-        if is_enclosing_type(kind) {
-            return extract_name_child(&current, source);
-        }
-        current = current.parent()?;
-    }
-}
-
-/// Go: methods have a receiver type — extract it from method_declaration.
-fn find_parent_go(node: &Node, source: &str) -> Option<String> {
-    let kind = node.kind();
-    if kind == "method_declaration" {
-        // Look for parameters child (the receiver)
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i as u32) {
-                if child.kind() == "parameter_list" {
-                    // The receiver type is inside the first parameter_list
-                    let text = child.utf8_text(source.as_bytes()).ok()?;
-                    // Extract type name from e.g. "(s *Server)" or "(s Server)"
-                    let cleaned = text.trim_matches(|c| c == '(' || c == ')');
-                    // Take the last word, strip pointer prefix
-                    let type_name = cleaned
-                        .split_whitespace()
-                        .last()?
-                        .trim_start_matches('*');
-                    return Some(type_name.to_string());
-                }
-            }
-        }
-    }
-    // For non-methods, walk up generically
-    find_parent_generic(node, source, SupportedLanguage::Go)
-}
-
-/// Check if a CST node kind represents an enclosing type definition.
-fn is_enclosing_type(kind: &str) -> bool {
-    matches!(
-        kind,
-        "class_declaration"
-            | "class_definition"
-            | "class"
-            | "record_declaration"
-            | "interface_declaration"
-            | "trait_item"
-            | "trait_declaration"
-            | "impl_item"
-            | "struct_declaration"
-            | "struct_item"
-            | "enum_declaration"
-            | "enum_item"
-            | "module"
-            | "mod_item"
-    )
-}
-
-/// Extract the `name:` child text from an enclosing type node.
-fn extract_name_child(node: &Node, source: &str) -> Option<String> {
-    for i in 0..node.named_child_count() {
-        if let Some(child) = node.named_child(i as u32) {
-            // Look for identifier-like name nodes
-            let kind = child.kind();
-            if kind == "identifier"
-                || kind == "type_identifier"
-                || kind == "name"
-                || kind == "constant"
-                || kind == "property_identifier"
-            {
-                return child
-                    .utf8_text(source.as_bytes())
-                    .ok()
-                    .map(|s| s.to_string());
-            }
-        }
-    }
-    None
-}
+// Signature extraction, visibility extraction, doc comment extraction, and
+// parent name resolution are now delegated to LanguageBehavior trait
+// implementations in `language_behavior.rs`. The query selection and kind
+// parsing remain here as they are query-specific, not language-convention.
 
 // ---------------------------------------------------------------------------
 // Query selection
@@ -722,6 +258,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::model::types::Visibility;
     use crate::parser;
 
     fn symbols_for(source: &str, lang: SupportedLanguage, filename: &str) -> Vec<Symbol> {
@@ -754,9 +291,15 @@ class UserService {
         );
 
         assert_eq!(symbols.len(), 3, "1 class + 2 methods");
-        assert!(symbols.iter().any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "getUser" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "deleteUser" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "getUser" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "deleteUser" && s.kind == SymbolKind::Method));
     }
 
     #[test]
@@ -781,9 +324,15 @@ enum Status {
             "types.ts",
         );
 
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Interface));
-        assert!(symbols.iter().any(|s| s.name == "createUser" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Interface));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "createUser" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
     }
 
     #[test]
@@ -819,11 +368,19 @@ class UserService:
             "service.py",
         );
 
-        assert!(symbols.iter().any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
         // Python functions inside a class are still function_definition nodes
-        assert!(symbols.iter().any(|s| s.name == "__init__" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "get_user" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "create_user" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "__init__" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "get_user" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "create_user" && s.kind == SymbolKind::Function));
         assert_eq!(symbols.len(), 4, "1 class + 3 functions");
     }
 
@@ -846,9 +403,15 @@ public class OrderService {
             "OrderService.java",
         );
 
-        assert!(symbols.iter().any(|s| s.name == "OrderService" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "createOrder" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "cancelOrder" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "OrderService" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "createOrder" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "cancelOrder" && s.kind == SymbolKind::Method));
         assert_eq!(symbols.len(), 3);
     }
 
@@ -898,8 +461,12 @@ func (s *Server) Start(port int) error {
             "main.go",
         );
 
-        assert!(symbols.iter().any(|s| s.name == "main" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "Start" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "main" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Start" && s.kind == SymbolKind::Method));
     }
 
     // --- C# ---
@@ -925,8 +492,12 @@ public class UsersController : ControllerBase {
         assert!(symbols
             .iter()
             .any(|s| s.name == "UsersController" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "GetAll" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "Create" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "GetAll" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Create" && s.kind == SymbolKind::Method));
     }
 
     #[test]
@@ -946,11 +517,15 @@ public record OrderRecord {
 
         // record declarations are mapped to SymbolKind::Class
         assert!(
-            symbols.iter().any(|s| s.name == "UserDto" && s.kind == SymbolKind::Class),
+            symbols
+                .iter()
+                .any(|s| s.name == "UserDto" && s.kind == SymbolKind::Class),
             "positional record should be extracted as class"
         );
         assert!(
-            symbols.iter().any(|s| s.name == "OrderRecord" && s.kind == SymbolKind::Class),
+            symbols
+                .iter()
+                .any(|s| s.name == "OrderRecord" && s.kind == SymbolKind::Class),
             "nominal record should be extracted as class"
         );
     }
@@ -982,10 +557,18 @@ fn helper() -> bool {
             "lib.rs",
         );
 
-        assert!(symbols.iter().any(|s| s.name == "Config" && s.kind == SymbolKind::Struct));
-        assert!(symbols.iter().any(|s| s.name == "AppError" && s.kind == SymbolKind::Enum));
-        assert!(symbols.iter().any(|s| s.name == "Repository" && s.kind == SymbolKind::Trait));
-        assert!(symbols.iter().any(|s| s.name == "helper" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Config" && s.kind == SymbolKind::Struct));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "AppError" && s.kind == SymbolKind::Enum));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Repository" && s.kind == SymbolKind::Trait));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "helper" && s.kind == SymbolKind::Function));
         assert_eq!(symbols.len(), 4);
     }
 
@@ -1012,8 +595,12 @@ class UserController {
         assert!(symbols
             .iter()
             .any(|s| s.name == "UserController" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "index" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "store" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "index" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "store" && s.kind == SymbolKind::Method));
     }
 
     // --- Ruby ---
@@ -1084,9 +671,15 @@ function middleware(req, res, next) {
             "router.js",
         );
 
-        assert!(symbols.iter().any(|s| s.name == "Router" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "handle" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "middleware" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Router" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "handle" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "middleware" && s.kind == SymbolKind::Function));
     }
 
     // =======================================================================
@@ -1106,7 +699,10 @@ function middleware(req, res, next) {
         let sig = symbols[0].signature.as_deref().unwrap();
         assert!(sig.contains("greet"), "signature should contain name");
         assert!(sig.contains("string"), "signature should contain type");
-        assert!(!sig.contains('{'), "signature should not contain body opener");
+        assert!(
+            !sig.contains('{'),
+            "signature should not contain body opener"
+        );
     }
 
     #[test]
@@ -1387,11 +983,15 @@ type Handler interface {
         );
 
         assert!(
-            symbols.iter().any(|s| s.name == "Server" && s.kind == SymbolKind::Struct),
+            symbols
+                .iter()
+                .any(|s| s.name == "Server" && s.kind == SymbolKind::Struct),
             "should detect struct declaration"
         );
         assert!(
-            symbols.iter().any(|s| s.name == "Handler" && s.kind == SymbolKind::Interface),
+            symbols
+                .iter()
+                .any(|s| s.name == "Handler" && s.kind == SymbolKind::Interface),
             "should detect interface declaration"
         );
     }
@@ -1428,7 +1028,11 @@ def process(data):
         );
         let sym = symbols.iter().find(|s| s.name == "process").unwrap();
         assert!(sym.doc.is_some(), "should extract docstring");
-        assert!(sym.doc.as_deref().unwrap().contains("Process the incoming data"));
+        assert!(sym
+            .doc
+            .as_deref()
+            .unwrap()
+            .contains("Process the incoming data"));
     }
 
     #[test]
@@ -1519,5 +1123,201 @@ public class ItemsController {
         );
         let method = symbols.iter().find(|s| s.name == "Delete").unwrap();
         assert_eq!(method.parent.as_deref(), Some("ItemsController"));
+    }
+
+    // =======================================================================
+    // is_test detection
+    // =======================================================================
+
+    #[test]
+    fn python_test_function_detected() {
+        let symbols = symbols_for(
+            "def test_create_user():\n    pass\n",
+            SupportedLanguage::Python,
+            "test_users.py",
+        );
+        let sym = symbols
+            .iter()
+            .find(|s| s.name == "test_create_user")
+            .unwrap();
+        assert!(sym.is_test, "def test_* should be detected as test");
+    }
+
+    #[test]
+    fn python_regular_function_not_test() {
+        let symbols = symbols_for(
+            "def create_user():\n    pass\n",
+            SupportedLanguage::Python,
+            "users.py",
+        );
+        let sym = symbols.iter().find(|s| s.name == "create_user").unwrap();
+        assert!(!sym.is_test, "regular function should not be test");
+    }
+
+    #[test]
+    fn go_test_function_detected() {
+        let symbols = symbols_for(
+            "package main\n\nimport \"testing\"\n\nfunc TestCreateUser(t *testing.T) {\n}\n",
+            SupportedLanguage::Go,
+            "user_test.go",
+        );
+        let sym = symbols.iter().find(|s| s.name == "TestCreateUser").unwrap();
+        assert!(
+            sym.is_test,
+            "func Test*(t *testing.T) should be detected as test"
+        );
+    }
+
+    #[test]
+    fn go_regular_function_not_test() {
+        let symbols = symbols_for(
+            "package main\n\nfunc CreateUser() {\n}\n",
+            SupportedLanguage::Go,
+            "user.go",
+        );
+        let sym = symbols.iter().find(|s| s.name == "CreateUser").unwrap();
+        assert!(!sym.is_test, "regular Go func should not be test");
+    }
+
+    #[test]
+    fn java_test_annotation_detected() {
+        let symbols = symbols_for(
+            r#"
+public class UserTest {
+    @Test
+    void shouldCreateUser() {
+    }
+}
+"#,
+            SupportedLanguage::Java,
+            "UserTest.java",
+        );
+        let sym = symbols
+            .iter()
+            .find(|s| s.name == "shouldCreateUser")
+            .unwrap();
+        assert!(sym.is_test, "@Test annotation should mark method as test");
+    }
+
+    #[test]
+    fn java_regular_method_not_test() {
+        let symbols = symbols_for(
+            r#"
+public class UserService {
+    public void createUser() {
+    }
+}
+"#,
+            SupportedLanguage::Java,
+            "UserService.java",
+        );
+        let sym = symbols.iter().find(|s| s.name == "createUser").unwrap();
+        assert!(!sym.is_test, "regular Java method should not be test");
+    }
+
+    #[test]
+    fn rust_test_attribute_detected() {
+        let symbols = symbols_for(
+            "#[test]\nfn test_it_works() {\n    assert!(true);\n}\n",
+            SupportedLanguage::Rust,
+            "lib.rs",
+        );
+        let sym = symbols.iter().find(|s| s.name == "test_it_works").unwrap();
+        assert!(
+            sym.is_test,
+            "#[test] attribute should mark function as test"
+        );
+    }
+
+    #[test]
+    fn rust_regular_function_not_test() {
+        let symbols = symbols_for(
+            "fn helper() -> bool {\n    true\n}\n",
+            SupportedLanguage::Rust,
+            "lib.rs",
+        );
+        let sym = symbols.iter().find(|s| s.name == "helper").unwrap();
+        assert!(!sym.is_test, "regular Rust fn should not be test");
+    }
+
+    #[test]
+    fn csharp_fact_attribute_detected() {
+        let symbols = symbols_for(
+            r#"
+public class UserTests {
+    [Fact]
+    public void ShouldCreateUser() {
+    }
+}
+"#,
+            SupportedLanguage::CSharp,
+            "UserTests.cs",
+        );
+        let sym = symbols
+            .iter()
+            .find(|s| s.name == "ShouldCreateUser")
+            .unwrap();
+        assert!(sym.is_test, "[Fact] attribute should mark method as test");
+    }
+
+    #[test]
+    fn ruby_test_method_detected() {
+        let symbols = symbols_for(
+            "class UserTest\n  def test_create\n    # assert\n  end\nend\n",
+            SupportedLanguage::Ruby,
+            "user_test.rb",
+        );
+        let sym = symbols.iter().find(|s| s.name == "test_create").unwrap();
+        assert!(sym.is_test, "def test_* should be detected as test in Ruby");
+    }
+
+    #[test]
+    fn ruby_regular_method_not_test() {
+        let symbols = symbols_for(
+            "class User\n  def create\n  end\nend\n",
+            SupportedLanguage::Ruby,
+            "user.rb",
+        );
+        let sym = symbols.iter().find(|s| s.name == "create").unwrap();
+        assert!(!sym.is_test, "regular Ruby method should not be test");
+    }
+
+    #[test]
+    fn php_test_method_detected() {
+        let symbols = symbols_for(
+            "<?php\nclass UserTest {\n    public function testCreate() {}\n}\n?>",
+            SupportedLanguage::Php,
+            "UserTest.php",
+        );
+        let sym = symbols.iter().find(|s| s.name == "testCreate").unwrap();
+        assert!(
+            sym.is_test,
+            "function test* should be detected as test in PHP"
+        );
+    }
+
+    #[test]
+    fn ts_test_function_detected() {
+        let symbols = symbols_for(
+            "function testCreateUser() {\n    expect(true).toBe(true);\n}\n",
+            SupportedLanguage::TypeScript,
+            "user.test.ts",
+        );
+        let sym = symbols.iter().find(|s| s.name == "testCreateUser").unwrap();
+        assert!(
+            sym.is_test,
+            "function test* should be detected as test in TS"
+        );
+    }
+
+    #[test]
+    fn ts_regular_function_not_test() {
+        let symbols = symbols_for(
+            "function createUser() {\n    return {};\n}\n",
+            SupportedLanguage::TypeScript,
+            "user.ts",
+        );
+        let sym = symbols.iter().find(|s| s.name == "createUser").unwrap();
+        assert!(!sym.is_test, "regular TS function should not be test");
     }
 }

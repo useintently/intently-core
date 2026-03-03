@@ -5,7 +5,7 @@ import sys
 
 
 CORE_ARCH_DIRS = [
-    "src/twin/",
+    "src/model/",
     "src/parser/",
     "src/search/",
     "src/engine.rs",
@@ -15,7 +15,7 @@ CORE_ARCH_DIRS = [
 def main() -> None:
     data = json.loads(sys.stdin.read())
     tool = data.get("tool_name", "")
-    if tool != "Write":
+    if tool not in ("Write", "Edit"):
         return
     fp = data.get("tool_input", {}).get("file_path", "")
     for arch_dir in CORE_ARCH_DIRS:

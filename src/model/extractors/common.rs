@@ -34,10 +34,28 @@ pub fn node_text(node: &Node, source: &str) -> String {
     source[node.start_byte()..node.end_byte()].to_string()
 }
 
+/// Extract the source text spanned by a tree-sitter node as a borrowed slice.
+///
+/// Zero-copy alternative to [`node_text`] — returns a `&str` tied to the
+/// source lifetime instead of allocating a new `String`. Use this when
+/// the text is only needed for comparisons, pattern matching, or other
+/// read-only operations within the same scope.
+pub fn node_text_ref<'a>(node: &Node, source: &'a str) -> &'a str {
+    node.utf8_text(source.as_bytes()).unwrap_or("")
+}
+
 /// Strip surrounding quote characters (single, double, or backtick).
 pub fn strip_quotes(s: &str) -> String {
     s.trim_matches(|c| c == '\'' || c == '"' || c == '`')
         .to_string()
+}
+
+/// Strip surrounding quote characters without allocating.
+///
+/// Zero-copy alternative to [`strip_quotes`] — returns a `&str` slice
+/// of the input with leading/trailing quote characters removed.
+pub fn strip_quotes_ref(s: &str) -> &str {
+    s.trim_matches(|c| c == '\'' || c == '"' || c == '`')
 }
 
 /// Try to parse a string literal from an argument's text.
@@ -50,7 +68,7 @@ pub fn extract_string_value(text: &str) -> Option<String> {
         || (text.starts_with('"') && text.ends_with('"'))
         || (text.starts_with('`') && text.ends_with('`'))
     {
-        Some(strip_quotes(text))
+        Some(strip_quotes_ref(text).to_string())
     } else {
         None
     }
@@ -105,6 +123,7 @@ pub fn parse_http_method(name: &str) -> Option<HttpMethod> {
 /// - C#: `invocation_expression`
 /// - PHP: `member_call_expression`, `function_call_expression`, `scoped_call_expression`
 /// - Ruby: `method_call`
+#[deprecated(note = "Use LanguageBehavior::call_node_kinds() for language-specific call detection")]
 pub fn is_call_node(kind: &str) -> bool {
     matches!(
         kind,
@@ -131,10 +150,9 @@ pub fn try_extract_log_sink(
     file_path: &Path,
     extraction: &mut FileExtraction,
 ) {
-    let call_text = node_text(node, source);
-
-    // Quick exit: does the call text contain any log object name?
-    let call_lower = call_text.to_lowercase();
+    // Quick exit using zero-copy text: does the call text contain any log object name?
+    let call_ref = node_text_ref(node, source);
+    let call_lower = call_ref.to_lowercase();
     let has_log_object = patterns::LOG_OBJECTS
         .iter()
         .any(|obj| call_lower.contains(&obj.to_lowercase()));
@@ -149,18 +167,95 @@ pub fn try_extract_log_sink(
         for method in patterns::LOG_METHODS {
             let dot_pattern = format!("{obj}.{method}(");
             let scope_pattern = format!("{obj}::{method}(");
-            if call_text.contains(&dot_pattern) || call_text.contains(&scope_pattern) {
-                let pii = patterns::contains_pii(&call_text);
+            if call_ref.contains(&dot_pattern) || call_ref.contains(&scope_pattern) {
+                let pii = patterns::contains_pii(call_ref);
                 extraction.sinks.push(Sink {
                     sink_type: SinkType::Log,
                     anchor: anchor_from_node(node, file_path),
-                    text: call_text,
+                    text: call_ref.to_string(),
                     contains_pii: pii,
                 });
                 return;
             }
         }
     }
+}
+
+/// Extract route parameters from a URL path pattern.
+///
+/// Recognizes three common styles used across web frameworks:
+/// - `:param` — Express, Gin, Echo, Rails
+/// - `{param}` — FastAPI, Spring, ASP.NET, Laravel, OpenAPI
+/// - `<param>` or `<type:param>` — Flask
+///
+/// Returns a `RouteParameter` for each unique parameter found, all with
+/// `location: ParameterLocation::Path` and `param_type: None`.
+pub fn extract_path_params(route_path: &str) -> Vec<RouteParameter> {
+    let mut params = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Style 1: `:param` — matches :word characters after / or at start
+    // Must not be inside {} or <> to avoid double-extraction
+    for segment in route_path.split('/') {
+        if let Some(name) = segment.strip_prefix(':') {
+            // Strip optional trailing characters like (regex) in Express
+            let name = name.split('(').next().unwrap_or(name);
+            if !name.is_empty() && seen.insert(name.to_string()) {
+                params.push(RouteParameter {
+                    name: name.to_string(),
+                    location: ParameterLocation::Path,
+                    param_type: None,
+                });
+            }
+        }
+    }
+
+    // Style 2: `{param}` — used by FastAPI, Spring, ASP.NET, Laravel
+    let mut rest = route_path;
+    while let Some(start) = rest.find('{') {
+        if let Some(end) = rest[start..].find('}') {
+            let inner = &rest[start + 1..start + end];
+            // Handle {param:regex} (ASP.NET constraints) — take only the name
+            let name = inner.split(':').next().unwrap_or(inner).trim();
+            if !name.is_empty() && !name.contains(' ') && seen.insert(name.to_string()) {
+                params.push(RouteParameter {
+                    name: name.to_string(),
+                    location: ParameterLocation::Path,
+                    param_type: None,
+                });
+            }
+            rest = &rest[start + end + 1..];
+        } else {
+            break;
+        }
+    }
+
+    // Style 3: `<param>` or `<type:param>` — Flask style
+    rest = route_path;
+    while let Some(start) = rest.find('<') {
+        if let Some(end) = rest[start..].find('>') {
+            let inner = &rest[start + 1..start + end];
+            // Flask uses <type:name>, take the last part after ':'
+            let name = if inner.contains(':') {
+                inner.rsplit(':').next().unwrap_or(inner)
+            } else {
+                inner
+            };
+            let name = name.trim();
+            if !name.is_empty() && !name.contains(' ') && seen.insert(name.to_string()) {
+                params.push(RouteParameter {
+                    name: name.to_string(),
+                    location: ParameterLocation::Path,
+                    param_type: None,
+                });
+            }
+            rest = &rest[start + end + 1..];
+        } else {
+            break;
+        }
+    }
+
+    params
 }
 
 /// Truncate a call expression text to a maximum display length.
@@ -187,6 +282,11 @@ pub fn new_extraction(
         symbols: Vec::new(),
         references: Vec::new(),
         data_models: Vec::new(),
+        env_dependencies: Vec::new(),
+        file_role: FileRole::Implementation,
+        estimated_tokens: 0,
+        content_hash: None,
+        git_metadata: None,
     }
 }
 
@@ -214,12 +314,24 @@ mod tests {
 
     #[test]
     fn extract_string_value_from_quoted_text() {
-        assert_eq!(extract_string_value("'/api/users'"), Some("/api/users".into()));
-        assert_eq!(extract_string_value("\"/api/users\""), Some("/api/users".into()));
-        assert_eq!(extract_string_value("`/api/users`"), Some("/api/users".into()));
+        assert_eq!(
+            extract_string_value("'/api/users'"),
+            Some("/api/users".into())
+        );
+        assert_eq!(
+            extract_string_value("\"/api/users\""),
+            Some("/api/users".into())
+        );
+        assert_eq!(
+            extract_string_value("`/api/users`"),
+            Some("/api/users".into())
+        );
         assert_eq!(extract_string_value("variable"), None);
         assert_eq!(extract_string_value("123"), None);
-        assert_eq!(extract_string_value("  '/spaced'  "), Some("/spaced".into()));
+        assert_eq!(
+            extract_string_value("  '/spaced'  "),
+            Some("/spaced".into())
+        );
     }
 
     #[test]
@@ -240,6 +352,69 @@ mod tests {
     }
 
     #[test]
+    fn extract_path_params_colon_style() {
+        let params = extract_path_params("/users/:id/posts/:postId");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "id");
+        assert_eq!(params[0].location, ParameterLocation::Path);
+        assert!(params[0].param_type.is_none());
+        assert_eq!(params[1].name, "postId");
+    }
+
+    #[test]
+    fn extract_path_params_curly_style() {
+        let params = extract_path_params("/users/{id}");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "id");
+    }
+
+    #[test]
+    fn extract_path_params_curly_with_constraint() {
+        // ASP.NET style: {id:int}
+        let params = extract_path_params("/users/{id:int}/orders/{orderId:guid}");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "id");
+        assert_eq!(params[1].name, "orderId");
+    }
+
+    #[test]
+    fn extract_path_params_flask_angle_style() {
+        let params = extract_path_params("/files/<path:filename>");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "filename");
+    }
+
+    #[test]
+    fn extract_path_params_flask_simple() {
+        let params = extract_path_params("/users/<id>");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "id");
+    }
+
+    #[test]
+    fn extract_path_params_no_params() {
+        let params = extract_path_params("/health");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn extract_path_params_no_duplicates() {
+        // If somehow same param name appears twice, only one should be returned
+        let params = extract_path_params("/users/:id/alias/:id");
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn extract_path_params_mixed_styles_no_double_extract() {
+        // Each param should only be extracted once even with mixed formats
+        let params = extract_path_params("/users/{userId}/posts/:postId");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "postId"); // colon style first
+        assert_eq!(params[1].name, "userId"); // curly style second
+    }
+
+    #[test]
+    #[allow(deprecated)]
     fn is_call_node_matches_all_language_variants() {
         assert!(is_call_node("call_expression"));
         assert!(is_call_node("call"));

@@ -12,11 +12,13 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::patterns;
 use crate::model::types::*;
+use crate::parser::SupportedLanguage;
 
-use super::common::{self, anchor_from_node, extract_string_value, node_text, truncate_call_text};
+use super::common::{
+    self, anchor_from_node, extract_string_value, node_text, node_text_ref, truncate_call_text,
+};
 
 /// Rails route DSL method names.
 const RAILS_ROUTE_METHODS: &[&str] = &["get", "post", "put", "patch", "delete"];
@@ -36,12 +38,7 @@ pub fn extract(
     extraction
 }
 
-fn extract_recursive(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     match node.kind() {
         "call" | "method_call" => {
             try_extract_route(node, source, file_path, extraction);
@@ -68,12 +65,7 @@ fn extract_recursive(
 /// post '/api/orders', to: 'orders#create'
 /// resources :products
 /// ```
-fn try_extract_route(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn try_extract_route(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     // Get the method name being called
     let method_name = get_call_method_name(node, source);
     let method_name = match method_name {
@@ -108,11 +100,16 @@ fn try_extract_route(
         return;
     }
 
+    let handler_name = extract_to_action(node, source);
+
     extraction.interfaces.push(Interface {
         method: http_method,
-        path: route_path,
+        path: route_path.clone(),
         auth: None, // Rails auth is at controller level, not route level
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&route_path),
+        handler_name,
+        request_body_type: None,
     });
 }
 
@@ -134,9 +131,12 @@ fn try_extract_resources_route(
 
     extraction.interfaces.push(Interface {
         method: HttpMethod::All,
-        path,
+        path: path.clone(),
         auth: None,
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&path),
+        handler_name: None,
+        request_body_type: None,
     });
 }
 
@@ -182,8 +182,8 @@ fn try_extract_http_call(
     file_path: &Path,
     extraction: &mut FileExtraction,
 ) {
-    let call_text = node_text(node, source);
-    let call_lower = call_text.to_lowercase();
+    let call_ref = node_text_ref(node, source);
+    let call_lower = call_ref.to_lowercase();
 
     let is_http_call = (call_lower.contains("httparty")
         || call_lower.contains("faraday")
@@ -201,7 +201,7 @@ fn try_extract_http_call(
         return;
     }
 
-    let display_text = truncate_call_text(call_text, 100);
+    let display_text = truncate_call_text(call_ref.to_string(), 100);
 
     extraction.dependencies.push(Dependency {
         target: display_text,
@@ -297,6 +297,56 @@ fn find_first_symbol_in_node(node: &Node, source: &str) -> Option<String> {
     None
 }
 
+/// Extract the action name from a Rails `to: 'controller#action'` keyword argument.
+///
+/// Walks the call node's children looking for a `pair` node where the key is
+/// `to` (a hash key or a simple symbol `:to`) and the value is a string like
+/// `'users#index'`. Returns the action part (after `#`) if found.
+fn extract_to_action(node: &Node, source: &str) -> Option<String> {
+    for i in 0..node.child_count() {
+        let child = node.child(i as u32)?;
+        if let Some(action) = find_to_pair_in_subtree(&child, source) {
+            return Some(action);
+        }
+    }
+    None
+}
+
+/// Recursively search for a `pair` node with key `to` and a string value
+/// containing `#`, returning the action portion.
+fn find_to_pair_in_subtree(node: &Node, source: &str) -> Option<String> {
+    if node.kind() == "pair" {
+        // Check if the key is `to:` or `:to`
+        if let Some(key_node) = node.child_by_field_name("key") {
+            let key_text = node_text_ref(&key_node, source);
+            let key_name = key_text.trim_start_matches(':').trim_end_matches(':');
+            if key_name == "to" {
+                if let Some(val_node) = node.child_by_field_name("value") {
+                    let val_text = node_text(&val_node, source);
+                    let val_str = common::strip_quotes(&val_text);
+                    // Extract the action part after '#'
+                    if let Some(hash_pos) = val_str.find('#') {
+                        let action = &val_str[hash_pos + 1..];
+                        if !action.is_empty() {
+                            return Some(action.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Recurse into children
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            if let Some(action) = find_to_pair_in_subtree(&child, source) {
+                return Some(action);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -306,16 +356,17 @@ mod tests {
 
     fn extract_rb(source: &str) -> FileExtraction {
         let path = PathBuf::from("routes.rb");
-        let parsed =
-            parser::parse_source(&path, source, SupportedLanguage::Ruby, None).unwrap();
+        let parsed = parser::parse_source(&path, source, SupportedLanguage::Ruby, None).unwrap();
         extract(&path, source, &parsed.tree, SupportedLanguage::Ruby)
     }
 
     #[test]
     fn extracts_rails_get_route() {
-        let ext = extract_rb(r#"
+        let ext = extract_rb(
+            r#"
 get '/users', to: 'users#index'
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/users");
@@ -323,9 +374,11 @@ get '/users', to: 'users#index'
 
     #[test]
     fn extracts_rails_post_route() {
-        let ext = extract_rb(r#"
+        let ext = extract_rb(
+            r#"
 post '/api/orders', to: 'orders#create'
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Post);
         assert_eq!(ext.interfaces[0].path, "/api/orders");
@@ -333,9 +386,11 @@ post '/api/orders', to: 'orders#create'
 
     #[test]
     fn extracts_resources_route() {
-        let ext = extract_rb(r#"
+        let ext = extract_rb(
+            r#"
 resources :products
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::All);
         assert_eq!(ext.interfaces[0].path, "/products");
@@ -344,43 +399,55 @@ resources :products
     #[test]
     fn detects_before_action_auth() {
         // before_action is controller-level, applied retroactively to routes
-        let ext = extract_rb(r#"
+        let ext = extract_rb(
+            r#"
 get '/api/profile', to: 'profiles#show'
 before_action :authenticate_user!
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_some());
     }
 
     #[test]
     fn extracts_httparty_call() {
-        let ext = extract_rb(r#"
+        let ext = extract_rb(
+            r#"
 response = HTTParty.get('https://api.example.com/data')
-"#);
+"#,
+        );
         assert_eq!(ext.dependencies.len(), 1);
-        assert_eq!(ext.dependencies[0].dependency_type, DependencyType::HttpCall);
+        assert_eq!(
+            ext.dependencies[0].dependency_type,
+            DependencyType::HttpCall
+        );
     }
 
     #[test]
     fn no_auth_when_missing() {
-        let ext = extract_rb(r#"
+        let ext = extract_rb(
+            r#"
 get '/health', to: 'health#show'
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_none());
     }
 
     #[test]
     fn detects_pii_in_log() {
-        let ext = extract_rb(r#"
+        let ext = extract_rb(
+            r#"
 logger.info("User email: #{user.email}")
-"#);
+"#,
+        );
         assert!(ext.sinks.iter().any(|s| s.contains_pii));
     }
 
     #[test]
     fn realistic_rails_routes() {
-        let ext = extract_rb(r#"
+        let ext = extract_rb(
+            r#"
 Rails.application.routes.draw do
   get '/health', to: 'health#show'
   post '/api/payments', to: 'payments#create'
@@ -389,7 +456,8 @@ Rails.application.routes.draw do
 
   logger.info("Routes loaded")
 end
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 4);
         assert!(ext.sinks.len() >= 1);
     }

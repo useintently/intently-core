@@ -12,11 +12,11 @@ use std::path::Path;
 
 use tree_sitter::{Node, Tree};
 
-use crate::parser::SupportedLanguage;
 use crate::model::patterns;
 use crate::model::types::*;
+use crate::parser::SupportedLanguage;
 
-use super::common::{self, anchor_from_node, node_text, truncate_call_text};
+use super::common::{self, anchor_from_node, node_text, node_text_ref, truncate_call_text};
 
 /// ASP.NET Core HTTP verb attributes → HTTP methods.
 const HTTP_VERB_ATTRIBUTES: &[(&str, &str)] = &[
@@ -51,12 +51,7 @@ pub fn extract(
     extraction
 }
 
-fn extract_recursive(
-    node: &Node,
-    source: &str,
-    file_path: &Path,
-    extraction: &mut FileExtraction,
-) {
+fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
     match node.kind() {
         "class_declaration" => {
             try_extract_controller_routes(node, source, file_path, extraction);
@@ -209,8 +204,7 @@ fn try_extract_attributed_route(
 
         // Check for Route attribute (class-level prefix, also sometimes on methods)
         if *attr_name == "Route" && route_info.is_none() {
-            let path = extract_path_from_attribute_text(attr_text)
-                .unwrap_or_default();
+            let path = extract_path_from_attribute_text(attr_text).unwrap_or_default();
             route_info = Some((HttpMethod::All, path, attr_anchor.clone()));
         }
 
@@ -233,11 +227,19 @@ fn try_extract_attributed_route(
             method_auth.or_else(|| class_auth.clone())
         };
 
+        // Extract method name from the method_declaration node
+        let handler_name = node
+            .child_by_field_name("name")
+            .map(|n| node_text(&n, source));
+
         extraction.interfaces.push(Interface {
             method,
-            path,
+            path: path.clone(),
             auth,
             anchor,
+            parameters: common::extract_path_params(&path),
+            handler_name,
+            request_body_type: None,
         });
     }
 }
@@ -265,7 +267,11 @@ fn compose_csharp_path(prefix: &str, method_path: &str) -> String {
 ///
 /// In C#'s tree-sitter grammar, attributes appear in `attribute_list`
 /// children of the method declaration, containing one or more `attribute` nodes.
-fn collect_attributes(node: &Node, source: &str, file_path: &Path) -> Vec<(String, String, SourceAnchor)> {
+fn collect_attributes(
+    node: &Node,
+    source: &str,
+    file_path: &Path,
+) -> Vec<(String, String, SourceAnchor)> {
     let mut result = Vec::new();
 
     // Check direct children for attribute_list
@@ -338,15 +344,11 @@ fn extract_attribute_name(node: &Node, source: &str) -> Option<String> {
 }
 
 /// Parse an HTTP verb attribute into method + path.
-fn try_parse_http_attribute(
-    attr_name: &str,
-    attr_text: &str,
-) -> Option<(HttpMethod, String)> {
+fn try_parse_http_attribute(attr_name: &str, attr_text: &str) -> Option<(HttpMethod, String)> {
     for (verb, method_str) in HTTP_VERB_ATTRIBUTES {
         if attr_name == *verb {
             let method = common::parse_http_method(method_str)?;
-            let path = extract_path_from_attribute_text(attr_text)
-                .unwrap_or_default();
+            let path = extract_path_from_attribute_text(attr_text).unwrap_or_default();
             return Some((method, path));
         }
     }
@@ -427,9 +429,12 @@ fn try_extract_minimal_api_route(
 
     extraction.interfaces.push(Interface {
         method: http_method,
-        path,
+        path: path.clone(),
         auth,
         anchor: anchor_from_node(node, file_path),
+        parameters: common::extract_path_params(&path),
+        handler_name: None,
+        request_body_type: None,
     });
 }
 
@@ -489,7 +494,7 @@ fn detect_minimal_api_auth(node: &Node, source: &str) -> Option<AuthKind> {
             "member_access_expression" => {
                 // Check the method name
                 if let Some(name_node) = current.child_by_field_name("name") {
-                    let name = node_text(&name_node, source);
+                    let name = node_text_ref(&name_node, source);
                     if name == "RequireAuthorization" {
                         return Some(AuthKind::Attribute("RequireAuthorization".into()));
                     }
@@ -537,11 +542,10 @@ fn try_extract_http_call(
     file_path: &Path,
     extraction: &mut FileExtraction,
 ) {
-    let call_text = node_text(node, source);
-    let call_lower = call_text.to_lowercase();
+    let call_ref = node_text_ref(node, source);
+    let call_lower = call_ref.to_lowercase();
 
-    let is_http_client = (call_lower.contains("httpclient")
-        || call_lower.contains("client"))
+    let is_http_client = (call_lower.contains("httpclient") || call_lower.contains("client"))
         && (call_lower.contains("getasync")
             || call_lower.contains("postasync")
             || call_lower.contains("putasync")
@@ -553,7 +557,7 @@ fn try_extract_http_call(
         return;
     }
 
-    let display_text = truncate_call_text(call_text, 100);
+    let display_text = truncate_call_text(call_ref.to_string(), 100);
 
     extraction.dependencies.push(Dependency {
         target: display_text,
@@ -571,21 +575,22 @@ mod tests {
 
     fn extract_cs(source: &str) -> FileExtraction {
         let path = PathBuf::from("Controller.cs");
-        let parsed =
-            parser::parse_source(&path, source, SupportedLanguage::CSharp, None).unwrap();
+        let parsed = parser::parse_source(&path, source, SupportedLanguage::CSharp, None).unwrap();
         extract(&path, source, &parsed.tree, SupportedLanguage::CSharp)
     }
 
     #[test]
     fn extracts_http_get_route() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 public class UsersController : ControllerBase {
     [HttpGet("users")]
     public IActionResult GetUsers() {
         return Ok();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/users");
@@ -593,14 +598,16 @@ public class UsersController : ControllerBase {
 
     #[test]
     fn extracts_http_post_with_path() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 public class OrdersController : ControllerBase {
     [HttpPost("api/orders")]
     public IActionResult CreateOrder([FromBody] OrderDto dto) {
         return Created();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Post);
         assert_eq!(ext.interfaces[0].path, "/api/orders");
@@ -608,7 +615,8 @@ public class OrdersController : ControllerBase {
 
     #[test]
     fn detects_authorize_attribute() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 public class SecureController : ControllerBase {
     [HttpGet("api/secure")]
     [Authorize]
@@ -616,7 +624,8 @@ public class SecureController : ControllerBase {
         return Ok();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(
             ext.interfaces[0].auth,
@@ -626,7 +635,8 @@ public class SecureController : ControllerBase {
 
     #[test]
     fn detects_authorize_with_roles() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 public class AdminController : ControllerBase {
     [HttpDelete("api/items/{id}")]
     [Authorize(Roles = "Admin")]
@@ -634,14 +644,16 @@ public class AdminController : ControllerBase {
         return NoContent();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_some());
     }
 
     #[test]
     fn no_auth_on_allow_anonymous() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 public class PublicController : ControllerBase {
     [HttpGet("health")]
     [AllowAnonymous]
@@ -649,14 +661,16 @@ public class PublicController : ControllerBase {
         return Ok("healthy");
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert!(ext.interfaces[0].auth.is_none());
     }
 
     #[test]
     fn extracts_http_client_call() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 public class PaymentService {
     public async Task<string> Charge() {
         var client = new HttpClient();
@@ -664,20 +678,26 @@ public class PaymentService {
         return await response.Content.ReadAsStringAsync();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.dependencies.len(), 1);
-        assert_eq!(ext.dependencies[0].dependency_type, DependencyType::HttpCall);
+        assert_eq!(
+            ext.dependencies[0].dependency_type,
+            DependencyType::HttpCall
+        );
     }
 
     #[test]
     fn detects_pii_in_log() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 public class Handler {
     public void Handle() {
         Logger.info("User email: " + user.email);
     }
 }
-"#);
+"#,
+        );
         assert!(ext.sinks.iter().any(|s| s.contains_pii));
     }
 
@@ -685,7 +705,8 @@ public class Handler {
 
     #[test]
     fn composes_class_route_prefix_with_method() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 [Route("api/v1/products")]
 public class ProductsController : ControllerBase {
     [HttpGet("")]
@@ -693,14 +714,16 @@ public class ProductsController : ControllerBase {
         return Ok();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].path, "/api/v1/products");
     }
 
     #[test]
     fn replaces_controller_token() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 [Route("api/[controller]")]
 public class ProductsController : ControllerBase {
     [HttpGet("{id}")]
@@ -708,14 +731,16 @@ public class ProductsController : ControllerBase {
         return Ok();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].path, "/api/products/{id}");
     }
 
     #[test]
     fn class_authorize_applies_to_methods() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 [Route("api/[controller]")]
 [Authorize]
 public class SecureController : ControllerBase {
@@ -735,23 +760,29 @@ public class SecureController : ControllerBase {
         return Ok();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 3);
         // List and Create inherit class [Authorize]
         assert!(ext.interfaces[0].auth.is_some(), "List has auth");
         assert!(ext.interfaces[1].auth.is_some(), "Create has auth");
         // Public has [AllowAnonymous] which nullifies class auth
-        assert!(ext.interfaces[2].auth.is_none(), "Public has no auth (AllowAnonymous)");
+        assert!(
+            ext.interfaces[2].auth.is_none(),
+            "Public has no auth (AllowAnonymous)"
+        );
     }
 
     // --- Minimal API ---
 
     #[test]
     fn extracts_minimal_api_get_route() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 var app = builder.Build();
 app.MapGet("/items", () => Results.Ok());
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
         assert_eq!(ext.interfaces[0].path, "/items");
@@ -759,10 +790,12 @@ app.MapGet("/items", () => Results.Ok());
 
     #[test]
     fn extracts_minimal_api_post_route() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 var app = builder.Build();
 app.MapPost("/items", (ItemDto item) => Results.Created());
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(ext.interfaces[0].method, HttpMethod::Post);
         assert_eq!(ext.interfaces[0].path, "/items");
@@ -770,10 +803,12 @@ app.MapPost("/items", (ItemDto item) => Results.Created());
 
     #[test]
     fn detects_minimal_api_require_authorization() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 var app = builder.Build();
 app.MapGet("/secret", () => Results.Ok()).RequireAuthorization();
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 1);
         assert_eq!(
             ext.interfaces[0].auth,
@@ -783,7 +818,8 @@ app.MapGet("/secret", () => Results.Ok()).RequireAuthorization();
 
     #[test]
     fn realistic_minimal_api_program() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
@@ -800,18 +836,26 @@ app.MapDelete("/api/items/{id}", (int id) => Results.NoContent())
     .RequireAuthorization();
 
 app.Run();
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 4, "4 Minimal API routes");
         assert!(ext.interfaces[0].auth.is_none(), "/health has no auth");
-        assert!(ext.interfaces[1].auth.is_none(), "GET /api/items has no auth");
+        assert!(
+            ext.interfaces[1].auth.is_none(),
+            "GET /api/items has no auth"
+        );
         assert!(ext.interfaces[2].auth.is_some(), "POST /api/items has auth");
         assert!(ext.interfaces[3].auth.is_some(), "DELETE has auth");
-        assert!(ext.sinks.iter().any(|s| s.contains_pii), "PII in log detected");
+        assert!(
+            ext.sinks.iter().any(|s| s.contains_pii),
+            "PII in log detected"
+        );
     }
 
     #[test]
     fn realistic_aspnet_controller() {
-        let ext = extract_cs(r#"
+        let ext = extract_cs(
+            r#"
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 
@@ -840,11 +884,12 @@ public class ProductsController : ControllerBase {
         return NoContent();
     }
 }
-"#);
+"#,
+        );
         assert_eq!(ext.interfaces.len(), 3);
         let authed: Vec<_> = ext.interfaces.iter().filter(|i| i.auth.is_some()).collect();
         assert_eq!(authed.len(), 2);
         assert_eq!(ext.dependencies.len(), 1);
-        assert!(ext.sinks.len() >= 1);
+        assert!(!ext.sinks.is_empty());
     }
 }
