@@ -3,6 +3,8 @@ pub mod error;
 pub mod git;
 pub mod model;
 pub mod parser;
+#[cfg(feature = "python-resolver")]
+pub mod python_resolver;
 pub mod search;
 pub mod workspace;
 

@@ -61,6 +61,8 @@ intently-core/
 │   ├── git/                # Git metadata extraction (optional, feature-gated)
 │   │   ├── mod.rs          # Module gate: #[cfg(feature = "git")]
 │   │   └── metadata.rs     # compute_git_metadata(), compute_git_stats()
+│   ├── python_resolver/    # Runtime Python import resolver (optional, feature-gated)
+│   │   └── mod.rs          # Module gate: #[cfg(feature = "python-resolver")]
 │   ├── search/             # ast-grep structural code search
 │   │   ├── mod.rs
 │   │   └── pattern_engine.rs

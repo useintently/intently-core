@@ -126,7 +126,7 @@ impl SymbolTable {
     ) -> ResolveResult {
         let bare_name = extract_bare_name(name);
 
-        // 1. Import-based resolution (0.95 internal, 0.75 external)
+        // 1. Import-based resolution (0.95 internal, 0.85 re-export, 0.75 external)
         if let Some(target_file) = imported_symbols.get(bare_name) {
             if target_file.as_os_str() == EXTERNAL_SENTINEL {
                 return ResolveResult {
@@ -142,6 +142,14 @@ impl SymbolTable {
                     method: ResolutionMethod::ImportBased,
                 };
             }
+            // File exists in project but symbol not directly defined there.
+            // This is the re-export pattern (Python __init__.py, JS barrel files):
+            // the symbol IS available via this module, just defined elsewhere.
+            return ResolveResult {
+                location: None,
+                confidence: 0.85,
+                method: ResolutionMethod::ImportBased,
+            };
         }
 
         // 1b. Receiver-prefix check for qualified names (e.g., "np.array" → check "np")
@@ -164,6 +172,12 @@ impl SymbolTable {
                             method: ResolutionMethod::ImportBased,
                         };
                     }
+                    // Receiver file exists but symbol not found — re-export pattern
+                    return ResolveResult {
+                        location: None,
+                        confidence: 0.80,
+                        method: ResolutionMethod::ImportBased,
+                    };
                 }
             }
         }
@@ -241,14 +255,23 @@ pub const EXTERNAL_SENTINEL: &str = "<external>";
 /// External imports (no `./` or `../` prefix) register their specifiers
 /// with a sentinel path, enabling Phase 2 to recognize them as
 /// "imported from external package" rather than falling to global search.
+///
+/// When `python_resolved` is provided (from the runtime Python resolver),
+/// it takes priority over static resolution for Python imports, enabling
+/// accurate re-export chain following (e.g., `torch.nn.Module` resolves
+/// to `torch/nn/modules/module.py` instead of `torch/nn/__init__.py`).
 pub fn build_import_index(
     file: &Path,
     imports: &[crate::model::types::ImportInfo],
     file_symbols: &HashMap<PathBuf, Vec<Symbol>>,
     project_root: &Path,
+    python_resolved: Option<&HashMap<String, PathBuf>>,
 ) -> HashMap<String, PathBuf> {
     let mut index = HashMap::new();
     let external_path = PathBuf::from(EXTERNAL_SENTINEL);
+    let is_python = file
+        .extension()
+        .is_some_and(|ext| ext == "py" || ext == "pyi");
 
     for import in imports {
         let is_relative = import.source.starts_with("./") || import.source.starts_with("../");
@@ -276,35 +299,115 @@ pub fn build_import_index(
                 }
             }
         } else {
-            // External import: register specifiers with sentinel path.
-            // This allows Phase 2 to classify references as ImportKnown (0.75)
-            // instead of falling through to GlobalAmbiguous (0.40).
+            // Priority for non-relative imports:
+            // 1. Python runtime resolver (follows re-export chains to actual files)
+            // 2. Static Python package resolution (__init__.py / module.py)
+            // 3. External sentinel
             let specifiers = if import.specifiers.is_empty() {
-                // Default import: `import express from 'express'` → register "express"
                 vec![import.source.clone()]
             } else {
                 import.specifiers.clone()
             };
 
-            for specifier in specifiers {
-                // Don't overwrite a relative import resolution with an external one.
-                // Relative imports are more precise.
-                index
-                    .entry(specifier)
-                    .or_insert_with(|| external_path.clone());
+            // Track which specifiers were resolved by higher-priority methods
+            let mut resolved_specifiers = Vec::new();
+
+            // 1. Python runtime resolver (per-symbol precision)
+            if is_python {
+                if let Some(py_map) = python_resolved {
+                    for specifier in &specifiers {
+                        let key = format!("{}.{}", import.source, specifier);
+                        if let Some(resolved_file) = py_map.get(&key) {
+                            index.insert(specifier.clone(), resolved_file.clone());
+                            resolved_specifiers.push(specifier.clone());
+                        }
+                    }
+                }
             }
 
-            // Register aliases pointing to external sentinel
-            // `import numpy as np` → "np" → <external>
-            for (alias_name, _original) in &import.aliases {
-                index
-                    .entry(alias_name.clone())
-                    .or_insert_with(|| external_path.clone());
+            // 2. Static Python package resolution for remaining specifiers
+            if is_python && resolved_specifiers.len() < specifiers.len() {
+                if let Some(static_file) =
+                    try_resolve_python_package(&import.source, file_symbols, project_root)
+                {
+                    for specifier in &specifiers {
+                        if !resolved_specifiers.contains(specifier) {
+                            index
+                                .entry(specifier.clone())
+                                .or_insert_with(|| static_file.clone());
+                            resolved_specifiers.push(specifier.clone());
+                        }
+                    }
+
+                    for (alias_name, _original) in &import.aliases {
+                        index
+                            .entry(alias_name.clone())
+                            .or_insert_with(|| static_file.clone());
+                    }
+                }
+            }
+
+            // 3. External sentinel for anything still unresolved
+            for specifier in &specifiers {
+                if !resolved_specifiers.contains(specifier) {
+                    index
+                        .entry(specifier.clone())
+                        .or_insert_with(|| external_path.clone());
+                }
+            }
+
+            // Register aliases (runtime resolver doesn't handle aliases directly)
+            if resolved_specifiers.is_empty() {
+                // No specifier resolved — aliases also go to sentinel
+                for (alias_name, _original) in &import.aliases {
+                    index
+                        .entry(alias_name.clone())
+                        .or_insert_with(|| external_path.clone());
+                }
             }
         }
     }
 
     index
+}
+
+/// Try to resolve a Python dotted module path to a file within the project.
+///
+/// Converts dots to path separators and checks `file_symbols` for:
+/// 1. `module/path/__init__.py` (package directory)
+/// 2. `module/path.py` (module file)
+///
+/// Returns `None` for stdlib/external modules not present in the project.
+fn try_resolve_python_package(
+    source: &str,
+    file_symbols: &HashMap<PathBuf, Vec<Symbol>>,
+    project_root: &Path,
+) -> Option<PathBuf> {
+    let as_path = source.replace('.', "/");
+
+    // Try relative paths (common in tests)
+    let init_path = PathBuf::from(format!("{as_path}/__init__.py"));
+    if file_symbols.contains_key(&init_path) {
+        return Some(init_path);
+    }
+
+    let module_path = PathBuf::from(format!("{as_path}.py"));
+    if file_symbols.contains_key(&module_path) {
+        return Some(module_path);
+    }
+
+    // Try absolute paths (WalkDir produces absolute keys in production)
+    let abs_init = project_root.join(&init_path);
+    if file_symbols.contains_key(&abs_init) {
+        return Some(abs_init);
+    }
+
+    let abs_module = project_root.join(&module_path);
+    if file_symbols.contains_key(&abs_module) {
+        return Some(abs_module);
+    }
+
+    None
 }
 
 /// Resolve a relative import path to a concrete file.
@@ -346,7 +449,7 @@ fn resolve_relative_path_for_index(
     }
 
     // 3. Try index files
-    const INDEX_FILES: &[&str] = &["index.ts", "index.js"];
+    const INDEX_FILES: &[&str] = &["index.ts", "index.js", "__init__.py"];
     for index_name in INDEX_FILES {
         let index_path = relative.join(index_name);
         if file_symbols.contains_key(&index_path) {
@@ -683,7 +786,13 @@ mod tests {
             aliases: vec![],
         }];
 
-        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+        let index = build_import_index(
+            Path::new("src/handler.ts"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
 
         assert_eq!(
             index.get("UserService"),
@@ -701,7 +810,13 @@ mod tests {
             aliases: vec![],
         }];
 
-        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+        let index = build_import_index(
+            Path::new("src/handler.ts"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
 
         assert_eq!(index.get("Router"), Some(&PathBuf::from(EXTERNAL_SENTINEL)));
         assert_eq!(
@@ -720,7 +835,13 @@ mod tests {
             aliases: vec![],
         }];
 
-        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+        let index = build_import_index(
+            Path::new("src/handler.ts"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
 
         assert_eq!(
             index.get("express"),
@@ -748,7 +869,13 @@ mod tests {
             },
         ];
 
-        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+        let index = build_import_index(
+            Path::new("src/handler.ts"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
 
         // Relative import should win (more precise)
         assert_eq!(
@@ -775,7 +902,13 @@ mod tests {
             },
         ];
 
-        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+        let index = build_import_index(
+            Path::new("src/handler.ts"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
 
         assert_eq!(
             index.get("UserService"),
@@ -799,7 +932,13 @@ mod tests {
             aliases: vec![("np".into(), "numpy".into())],
         }];
 
-        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+        let index = build_import_index(
+            Path::new("src/handler.ts"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
 
         // Both the original name and the alias should be registered
         assert_eq!(index.get("numpy"), Some(&PathBuf::from(EXTERNAL_SENTINEL)));
@@ -816,7 +955,13 @@ mod tests {
             aliases: vec![("US".into(), "UserService".into())],
         }];
 
-        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+        let index = build_import_index(
+            Path::new("src/handler.ts"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
 
         assert_eq!(
             index.get("UserService"),
@@ -929,6 +1074,279 @@ mod tests {
         assert_eq!(
             result.location.unwrap().file,
             PathBuf::from("src/service.ts")
+        );
+    }
+
+    // --- Python intra-project package resolution ---
+
+    #[test]
+    fn try_resolve_python_package_finds_init_py() {
+        let mut fs = HashMap::new();
+        fs.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol(
+                "Module",
+                "torch/nn/__init__.py",
+                1,
+                SymbolKind::Class,
+            )],
+        );
+
+        let result = try_resolve_python_package("torch.nn", &fs, Path::new(""));
+        assert_eq!(result, Some(PathBuf::from("torch/nn/__init__.py")));
+    }
+
+    #[test]
+    fn try_resolve_python_package_finds_module_py() {
+        let mut fs = HashMap::new();
+        fs.insert(
+            PathBuf::from("torch/nn/conv.py"),
+            vec![make_symbol(
+                "Conv2d",
+                "torch/nn/conv.py",
+                1,
+                SymbolKind::Class,
+            )],
+        );
+
+        let result = try_resolve_python_package("torch.nn.conv", &fs, Path::new(""));
+        assert_eq!(result, Some(PathBuf::from("torch/nn/conv.py")));
+    }
+
+    #[test]
+    fn try_resolve_python_package_prefers_init_over_module() {
+        let mut fs = HashMap::new();
+        // Both torch/nn/__init__.py and torch/nn.py exist — __init__.py wins
+        fs.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol(
+                "Module",
+                "torch/nn/__init__.py",
+                1,
+                SymbolKind::Class,
+            )],
+        );
+        fs.insert(
+            PathBuf::from("torch/nn.py"),
+            vec![make_symbol("Module", "torch/nn.py", 1, SymbolKind::Class)],
+        );
+
+        let result = try_resolve_python_package("torch.nn", &fs, Path::new(""));
+        assert_eq!(result, Some(PathBuf::from("torch/nn/__init__.py")));
+    }
+
+    #[test]
+    fn try_resolve_python_package_returns_none_for_external() {
+        let fs = HashMap::new(); // empty — no project files
+        let result = try_resolve_python_package("numpy", &fs, Path::new(""));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn try_resolve_python_package_finds_absolute_paths() {
+        let mut fs = HashMap::new();
+        fs.insert(
+            PathBuf::from("/project/torch/nn/__init__.py"),
+            vec![make_symbol(
+                "Module",
+                "/project/torch/nn/__init__.py",
+                1,
+                SymbolKind::Class,
+            )],
+        );
+
+        let result = try_resolve_python_package("torch.nn", &fs, Path::new("/project"));
+        assert_eq!(result, Some(PathBuf::from("/project/torch/nn/__init__.py")));
+    }
+
+    #[test]
+    fn build_import_index_resolves_python_intra_project_package() {
+        let mut fs = HashMap::new();
+        fs.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol(
+                "Module",
+                "torch/nn/__init__.py",
+                1,
+                SymbolKind::Class,
+            )],
+        );
+
+        let imports = vec![crate::model::types::ImportInfo {
+            source: "torch.nn".into(),
+            specifiers: vec!["Module".into()],
+            line: 1,
+            aliases: vec![],
+        }];
+
+        let index = build_import_index(
+            Path::new("myapp/main.py"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
+
+        // Should resolve to actual file, not external sentinel
+        assert_eq!(
+            index.get("Module"),
+            Some(&PathBuf::from("torch/nn/__init__.py"))
+        );
+    }
+
+    #[test]
+    fn build_import_index_python_external_when_not_in_project() {
+        let fs = HashMap::new(); // no torch files in project
+
+        let imports = vec![crate::model::types::ImportInfo {
+            source: "torch.nn".into(),
+            specifiers: vec!["Module".into()],
+            line: 1,
+            aliases: vec![],
+        }];
+
+        let index = build_import_index(
+            Path::new("myapp/main.py"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
+
+        // Should fall through to external sentinel
+        assert_eq!(index.get("Module"), Some(&PathBuf::from(EXTERNAL_SENTINEL)));
+    }
+
+    #[test]
+    fn build_import_index_non_python_file_skips_package_resolution() {
+        let mut fs = HashMap::new();
+        // Even though torch/nn/__init__.py exists, a .ts file shouldn't use Python resolution
+        fs.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol(
+                "Module",
+                "torch/nn/__init__.py",
+                1,
+                SymbolKind::Class,
+            )],
+        );
+
+        let imports = vec![crate::model::types::ImportInfo {
+            source: "torch.nn".into(),
+            specifiers: vec!["Module".into()],
+            line: 1,
+            aliases: vec![],
+        }];
+
+        let index = build_import_index(
+            Path::new("myapp/main.ts"),
+            &imports,
+            &fs,
+            Path::new(""),
+            None,
+        );
+
+        // TypeScript file: should stay external
+        assert_eq!(index.get("Module"), Some(&PathBuf::from(EXTERNAL_SENTINEL)));
+    }
+
+    #[test]
+    fn build_import_index_python_resolver_takes_priority_over_static() {
+        let mut fs = HashMap::new();
+        // Static resolution would point to __init__.py
+        fs.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol(
+                "Module",
+                "torch/nn/__init__.py",
+                1,
+                SymbolKind::Class,
+            )],
+        );
+        // But the actual defining file is modules/module.py
+        fs.insert(
+            PathBuf::from("torch/nn/modules/module.py"),
+            vec![make_symbol(
+                "Module",
+                "torch/nn/modules/module.py",
+                27,
+                SymbolKind::Class,
+            )],
+        );
+
+        let imports = vec![crate::model::types::ImportInfo {
+            source: "torch.nn".into(),
+            specifiers: vec!["Module".into()],
+            line: 1,
+            aliases: vec![],
+        }];
+
+        // Simulate Python runtime resolver output
+        let mut python_resolved = HashMap::new();
+        python_resolved.insert(
+            "torch.nn.Module".to_string(),
+            PathBuf::from("torch/nn/modules/module.py"),
+        );
+
+        let index = build_import_index(
+            Path::new("myapp/main.py"),
+            &imports,
+            &fs,
+            Path::new(""),
+            Some(&python_resolved),
+        );
+
+        // Python resolver should win over static __init__.py resolution
+        assert_eq!(
+            index.get("Module"),
+            Some(&PathBuf::from("torch/nn/modules/module.py"))
+        );
+    }
+
+    #[test]
+    fn build_import_index_python_resolver_partial_coverage() {
+        let mut fs = HashMap::new();
+        fs.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol(
+                "Module",
+                "torch/nn/__init__.py",
+                1,
+                SymbolKind::Class,
+            )],
+        );
+
+        let imports = vec![crate::model::types::ImportInfo {
+            source: "torch.nn".into(),
+            specifiers: vec!["Module".into(), "Conv2d".into()],
+            line: 1,
+            aliases: vec![],
+        }];
+
+        // Python resolver only knows about Module, not Conv2d
+        let mut python_resolved = HashMap::new();
+        python_resolved.insert(
+            "torch.nn.Module".to_string(),
+            PathBuf::from("torch/nn/modules/module.py"),
+        );
+
+        let index = build_import_index(
+            Path::new("myapp/main.py"),
+            &imports,
+            &fs,
+            Path::new(""),
+            Some(&python_resolved),
+        );
+
+        // Module: resolved by Python resolver
+        assert_eq!(
+            index.get("Module"),
+            Some(&PathBuf::from("torch/nn/modules/module.py"))
+        );
+        // Conv2d: falls to static resolution (torch/nn/__init__.py)
+        assert_eq!(
+            index.get("Conv2d"),
+            Some(&PathBuf::from("torch/nn/__init__.py"))
         );
     }
 }

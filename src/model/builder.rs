@@ -428,12 +428,41 @@ impl CodeModelBuilder {
         // Post-processing: resolve ALL references (imports + calls + hierarchy)
         // via the two-level symbol table for confident cross-file resolution.
         // Uses the component's root, not the workspace root.
+        //
+        // When the `python-resolver` feature is enabled, runtime-resolved
+        // import targets are passed through to the import index builder,
+        // enabling accurate re-export chain following for Python imports.
+        #[cfg(feature = "python-resolver")]
+        let python_resolved_map = {
+            let queries = crate::python_resolver::collect_python_queries(&file_imports);
+            if queries.is_empty() {
+                None
+            } else {
+                let raw = crate::python_resolver::batch_resolve(&state.root, &queries);
+                if raw.is_empty() {
+                    None
+                } else {
+                    // Convert PythonResolved → PathBuf for the import index
+                    let map: std::collections::HashMap<String, std::path::PathBuf> = raw
+                        .into_iter()
+                        .map(|(key, resolved)| (key, resolved.file))
+                        .collect();
+                    Some(map)
+                }
+            }
+        };
+        #[cfg(not(feature = "python-resolver"))]
+        let python_resolved_map: Option<
+            std::collections::HashMap<String, std::path::PathBuf>,
+        > = None;
+
         let all_resolved = super::import_resolver::resolve_all_references(
             &file_imports,
             &file_symbols,
             &references,
             &state.root,
             &file_languages,
+            python_resolved_map.as_ref(),
         );
         references = all_resolved;
 

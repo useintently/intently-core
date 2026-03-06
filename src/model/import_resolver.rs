@@ -33,7 +33,7 @@ const RESOLVE_EXTENSIONS: &[&str] = &[
 ///
 /// When `./utils` resolves to a directory, these are tried in order:
 /// `./utils/index.ts`, `./utils/index.js`.
-const INDEX_FILES: &[&str] = &["index.ts", "index.js"];
+const INDEX_FILES: &[&str] = &["index.ts", "index.js", "__init__.py"];
 
 /// Resolve imports to cross-file references.
 ///
@@ -98,6 +98,7 @@ pub fn resolve_all_references(
     unresolved_refs: &[Reference],
     project_root: &Path,
     file_languages: &HashMap<PathBuf, SupportedLanguage>,
+    python_resolved: Option<&HashMap<String, PathBuf>>,
 ) -> Vec<Reference> {
     // Phase 1: Import resolution (existing logic)
     let import_refs = resolve_imports(file_imports, file_symbols, project_root);
@@ -113,7 +114,13 @@ pub fn resolve_all_references(
     let import_indices: HashMap<&PathBuf, HashMap<String, PathBuf>> = file_imports
         .iter()
         .map(|(file, imps)| {
-            let index = symbol_table::build_import_index(file, imps, file_symbols, project_root);
+            let index = symbol_table::build_import_index(
+                file,
+                imps,
+                file_symbols,
+                project_root,
+                python_resolved,
+            );
             (file, index)
         })
         .collect();
@@ -233,6 +240,24 @@ fn resolve_single_import(
             project_root,
         )
     } else {
+        // For Python files: try resolving absolute dotted imports as intra-project
+        // before falling back to external. `from torch.nn import Module` should
+        // resolve to `torch/nn/__init__.py` if it exists in the project.
+        let is_python = importing_file
+            .extension()
+            .is_some_and(|ext| ext == "py" || ext == "pyi");
+        if is_python {
+            if let Some(resolved_path) =
+                try_resolve_python_package_import(&import.source, file_symbols, project_root)
+            {
+                return resolve_intra_project_import(
+                    importing_file,
+                    import,
+                    &resolved_path,
+                    file_symbols,
+                );
+            }
+        }
         resolve_external_import(importing_file, import, symbol_index)
     }
 }
@@ -316,6 +341,93 @@ fn resolve_external_import(
             is_test_reference: false,
         })
         .collect()
+}
+
+/// Resolve an intra-project Python package import to references.
+///
+/// Called when `try_resolve_python_package_import` finds that a dotted
+/// module path (e.g., `torch.nn`) maps to an actual file in the project.
+/// Creates references with the resolved file as target, matching specifiers
+/// against the file's exported symbols.
+fn resolve_intra_project_import(
+    importing_file: &Path,
+    import: &ImportInfo,
+    resolved_file: &Path,
+    file_symbols: &HashMap<PathBuf, Vec<Symbol>>,
+) -> Vec<Reference> {
+    let specifiers = effective_specifiers(import);
+
+    specifiers
+        .iter()
+        .map(|specifier| {
+            let target_line = find_symbol_in_file(specifier, resolved_file, file_symbols);
+
+            // Symbol found directly → 0.95; not found → 0.85 (likely re-exported
+            // via __init__.py or barrel file — the import IS valid, symbol just
+            // defined in a sub-module).
+            let (confidence, resolution_method) = match target_line {
+                Some(_) => (0.95, ResolutionMethod::ImportBased),
+                None => (0.85, ResolutionMethod::ImportBased),
+            };
+
+            Reference {
+                source_symbol: String::new(),
+                source_file: importing_file.to_path_buf(),
+                source_line: import.line,
+                target_symbol: specifier.clone(),
+                target_file: Some(resolved_file.to_path_buf()),
+                target_line,
+                reference_kind: ReferenceKind::Import,
+                confidence,
+                resolution_method,
+                is_test_reference: false,
+            }
+        })
+        .collect()
+}
+
+/// Try to resolve a Python dotted module path to a file within the project.
+///
+/// Converts dots to path separators and checks if the resulting path exists
+/// in `file_symbols`. Tries in order:
+/// 1. `module/path/__init__.py` (package)
+/// 2. `module/path.py` (module file)
+///
+/// Also tries absolute paths (prefixed with `project_root`) since `file_symbols`
+/// may contain absolute keys from `WalkDir`.
+///
+/// Returns `None` for stdlib/external modules that don't exist in the project.
+fn try_resolve_python_package_import(
+    source: &str,
+    file_symbols: &HashMap<PathBuf, Vec<Symbol>>,
+    project_root: &Path,
+) -> Option<PathBuf> {
+    // Convert dots to path separators: "torch.nn" → "torch/nn"
+    let as_path = source.replace('.', "/");
+
+    // Try relative paths first (common in tests and small projects)
+    let init_path = PathBuf::from(format!("{as_path}/__init__.py"));
+    if file_symbols.contains_key(&init_path) {
+        return Some(init_path);
+    }
+
+    let module_path = PathBuf::from(format!("{as_path}.py"));
+    if file_symbols.contains_key(&module_path) {
+        return Some(module_path);
+    }
+
+    // Try absolute paths (WalkDir produces absolute keys in production)
+    let abs_init = project_root.join(&init_path);
+    if file_symbols.contains_key(&abs_init) {
+        return Some(abs_init);
+    }
+
+    let abs_module = project_root.join(&module_path);
+    if file_symbols.contains_key(&abs_module) {
+        return Some(abs_module);
+    }
+
+    None
 }
 
 /// Normalize Python relative imports to JS-style relative paths.
@@ -949,5 +1061,184 @@ mod tests {
         // File resolves, but symbol does not exist in it.
         assert_eq!(r.target_file, Some(PathBuf::from("src/service.ts")));
         assert!(r.target_line.is_none());
+    }
+
+    // --- Python intra-project package import tests ---
+
+    #[test]
+    fn python_absolute_import_resolves_to_intra_project_init_py() {
+        // `from torch.nn import Module` in a .py file should resolve to
+        // `torch/nn/__init__.py` when that file exists in the project.
+        let mut file_imports = HashMap::new();
+        file_imports.insert(
+            PathBuf::from("myapp/train.py"),
+            vec![ImportInfo {
+                source: "torch.nn".into(),
+                specifiers: vec!["Module".into()],
+                line: 1,
+                aliases: vec![],
+            }],
+        );
+
+        let mut file_symbols = HashMap::new();
+        file_symbols.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol("Module", "torch/nn/__init__.py", 5)],
+        );
+
+        let refs = resolve_imports(&file_imports, &file_symbols, Path::new(""));
+
+        assert_eq!(refs.len(), 1);
+        let r = &refs[0];
+        assert_eq!(r.target_symbol, "Module");
+        assert_eq!(r.target_file, Some(PathBuf::from("torch/nn/__init__.py")));
+        assert_eq!(r.target_line, Some(5));
+        assert_eq!(r.confidence, 0.95);
+        assert_eq!(r.resolution_method, ResolutionMethod::ImportBased);
+    }
+
+    #[test]
+    fn python_absolute_import_resolves_to_module_py() {
+        // `from torch.nn.conv import Conv2d` → `torch/nn/conv.py`
+        let mut file_imports = HashMap::new();
+        file_imports.insert(
+            PathBuf::from("myapp/model.py"),
+            vec![ImportInfo {
+                source: "torch.nn.conv".into(),
+                specifiers: vec!["Conv2d".into()],
+                line: 2,
+                aliases: vec![],
+            }],
+        );
+
+        let mut file_symbols = HashMap::new();
+        file_symbols.insert(
+            PathBuf::from("torch/nn/conv.py"),
+            vec![make_symbol("Conv2d", "torch/nn/conv.py", 10)],
+        );
+
+        let refs = resolve_imports(&file_imports, &file_symbols, Path::new(""));
+
+        assert_eq!(refs.len(), 1);
+        let r = &refs[0];
+        assert_eq!(r.target_file, Some(PathBuf::from("torch/nn/conv.py")));
+        assert_eq!(r.target_line, Some(10));
+        assert_eq!(r.confidence, 0.95);
+    }
+
+    #[test]
+    fn python_absolute_import_falls_to_external_when_not_in_project() {
+        // `from numpy import array` — numpy not in project, stays external
+        let mut file_imports = HashMap::new();
+        file_imports.insert(
+            PathBuf::from("myapp/main.py"),
+            vec![ImportInfo {
+                source: "numpy".into(),
+                specifiers: vec!["array".into()],
+                line: 1,
+                aliases: vec![],
+            }],
+        );
+
+        let file_symbols: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
+
+        let refs = resolve_imports(&file_imports, &file_symbols, Path::new(""));
+
+        assert_eq!(refs.len(), 1);
+        let r = &refs[0];
+        assert!(r.target_file.is_none());
+        assert_eq!(r.resolution_method, ResolutionMethod::External);
+    }
+
+    #[test]
+    fn non_python_file_skips_package_import_resolution() {
+        // TypeScript file importing "torch.nn" should NOT trigger Python resolution
+        let mut file_imports = HashMap::new();
+        file_imports.insert(
+            PathBuf::from("myapp/main.ts"),
+            vec![ImportInfo {
+                source: "torch.nn".into(),
+                specifiers: vec!["Module".into()],
+                line: 1,
+                aliases: vec![],
+            }],
+        );
+
+        let mut file_symbols = HashMap::new();
+        file_symbols.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol("Module", "torch/nn/__init__.py", 5)],
+        );
+
+        let refs = resolve_imports(&file_imports, &file_symbols, Path::new(""));
+
+        assert_eq!(refs.len(), 1);
+        let r = &refs[0];
+        // Should be external, not intra-project
+        assert!(r.target_file.is_none());
+        assert_eq!(r.resolution_method, ResolutionMethod::External);
+    }
+
+    #[test]
+    fn python_package_import_reexport_gets_high_confidence() {
+        // File resolves but specific symbol not directly defined there (re-export)
+        let mut file_imports = HashMap::new();
+        file_imports.insert(
+            PathBuf::from("myapp/main.py"),
+            vec![ImportInfo {
+                source: "torch.nn".into(),
+                specifiers: vec!["NonExistent".into()],
+                line: 1,
+                aliases: vec![],
+            }],
+        );
+
+        let mut file_symbols = HashMap::new();
+        file_symbols.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol("Module", "torch/nn/__init__.py", 5)],
+        );
+
+        let refs = resolve_imports(&file_imports, &file_symbols, Path::new(""));
+
+        assert_eq!(refs.len(), 1);
+        let r = &refs[0];
+        assert_eq!(r.target_file, Some(PathBuf::from("torch/nn/__init__.py")));
+        assert!(r.target_line.is_none());
+        // Re-export pattern: file exists but symbol defined elsewhere → 0.85
+        assert_eq!(r.confidence, 0.85);
+    }
+
+    // --- try_resolve_python_package_import tests ---
+
+    #[test]
+    fn try_resolve_python_package_import_finds_init() {
+        let mut fs = HashMap::new();
+        fs.insert(
+            PathBuf::from("torch/nn/__init__.py"),
+            vec![make_symbol("Module", "torch/nn/__init__.py", 1)],
+        );
+
+        let result = try_resolve_python_package_import("torch.nn", &fs, Path::new(""));
+        assert_eq!(result, Some(PathBuf::from("torch/nn/__init__.py")));
+    }
+
+    #[test]
+    fn try_resolve_python_package_import_finds_module_file() {
+        let mut fs = HashMap::new();
+        fs.insert(
+            PathBuf::from("mylib/utils.py"),
+            vec![make_symbol("helper", "mylib/utils.py", 1)],
+        );
+
+        let result = try_resolve_python_package_import("mylib.utils", &fs, Path::new(""));
+        assert_eq!(result, Some(PathBuf::from("mylib/utils.py")));
+    }
+
+    #[test]
+    fn try_resolve_python_package_import_returns_none_for_missing() {
+        let fs: HashMap<PathBuf, Vec<Symbol>> = HashMap::new();
+        let result = try_resolve_python_package_import("nonexistent.module", &fs, Path::new(""));
+        assert_eq!(result, None);
     }
 }

@@ -7,6 +7,7 @@ license = "MIT"
 [features]
 default = []
 git = []
+python-resolver = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
