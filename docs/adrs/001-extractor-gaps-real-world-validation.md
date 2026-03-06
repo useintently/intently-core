@@ -91,6 +91,7 @@ The Java extractor's `collect_annotations` / `try_parse_mapping_annotation` patt
 ## GAP-02: Route Group Prefix Resolution (Go, PHP, C#)
 
 **Severity:** Medium
+**Status:** Phase 1 Complete (per-file resolution). Phase 2 (cross-file) is future work.
 **Impact:** Endpoints detected but with empty or relative path strings, reducing the value of endpoint queries.
 **Files:** `go.rs`, `php.rs`, `csharp.rs`
 

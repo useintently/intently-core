@@ -159,7 +159,8 @@ fn python_django_styleguide() {
 #[ignore]
 fn java_spring_petclinic() {
     let name = "spring-petclinic";
-    let (_tmp, path) = common::clone_repo("https://github.com/spring-projects/spring-petclinic", None);
+    let (_tmp, path) =
+        common::clone_repo("https://github.com/spring-projects/spring-petclinic", None);
 
     let result = common::analyze_repo(&path, 120);
     common::print_report(&result, name);
@@ -466,7 +467,8 @@ fn cpp_leveldb() {
 #[ignore]
 fn scala_play_seed() {
     let name = "play-scala-seed";
-    let (_tmp, path) = common::clone_repo("https://github.com/playframework/play-scala-seed.g8", None);
+    let (_tmp, path) =
+        common::clone_repo("https://github.com/playframework/play-scala-seed.g8", None);
 
     let result = common::analyze_repo(&path, 120);
     common::print_report(&result, name);
@@ -649,10 +651,7 @@ fn python_saleor_large() {
 #[ignore]
 fn java_design_patterns_large() {
     let name = "java-design-patterns";
-    let (_tmp, path) = common::clone_repo(
-        "https://github.com/iluwatar/java-design-patterns",
-        None,
-    );
+    let (_tmp, path) = common::clone_repo("https://github.com/iluwatar/java-design-patterns", None);
 
     let result = common::analyze_repo(&path, 300);
     common::print_report(&result, name);
@@ -676,10 +675,7 @@ fn typescript_nextjs_cal_platform() {
     // Next.js + TypeScript monorepo — tests extraction on a React/Next.js codebase.
     // cal.com platform is a large Next.js app with API routes, tRPC, and React components.
     let name = "nextjs-cal-platform";
-    let (_tmp, path) = common::clone_repo(
-        "https://github.com/calcom/cal.com",
-        Some("apps/web"),
-    );
+    let (_tmp, path) = common::clone_repo("https://github.com/calcom/cal.com", Some("apps/web"));
 
     let result = common::analyze_repo(&path, 300);
     common::print_report(&result, name);
@@ -802,10 +798,8 @@ fn python_django_large() {
 fn csharp_aspnet_ecommerce() {
     // eShopOnWeb — Microsoft's reference ASP.NET Core architecture.
     let name = "eshop-on-web";
-    let (_tmp, path) = common::clone_repo(
-        "https://github.com/dotnet-architecture/eShopOnWeb",
-        None,
-    );
+    let (_tmp, path) =
+        common::clone_repo("https://github.com/dotnet-architecture/eShopOnWeb", None);
 
     let result = common::analyze_repo(&path, 180);
     common::print_report(&result, name);
@@ -824,10 +818,7 @@ fn csharp_aspnet_ecommerce() {
 fn php_laravel_large() {
     // Laravel framework itself — large PHP project.
     let name = "laravel-framework";
-    let (_tmp, path) = common::clone_repo(
-        "https://github.com/laravel/framework",
-        None,
-    );
+    let (_tmp, path) = common::clone_repo("https://github.com/laravel/framework", None);
 
     let result = common::analyze_repo(&path, 300);
     common::print_report(&result, name);
@@ -1001,7 +992,10 @@ fn phase3_enriched_routes_express() {
         .map(|r| {
             format!(
                 "{:?} {} (handler={:?}, params={})",
-                r.method, r.path, r.handler_name, r.parameters.len()
+                r.method,
+                r.path,
+                r.handler_name,
+                r.parameters.len()
             )
         })
         .collect();
@@ -1035,7 +1029,10 @@ fn phase3_enriched_routes_spring() {
         .map(|r| {
             format!(
                 "{:?} {} (handler={:?}, params={})",
-                r.method, r.path, r.handler_name, r.parameters.len()
+                r.method,
+                r.path,
+                r.handler_name,
+                r.parameters.len()
             )
         })
         .collect();

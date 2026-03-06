@@ -36,10 +36,7 @@ struct RepoSpec {
 /// Uses `catch_unwind` per repo so one failure doesn't abort the suite.
 /// `TempDir` drops at end of each iteration → disk freed automatically.
 fn run_language_suite(suite_name: &str, specs: &[RepoSpec]) {
-    eprintln!(
-        "\n{}",
-        "=".repeat(70)
-    );
+    eprintln!("\n{}", "=".repeat(70));
     eprintln!("  Suite: {suite_name} ({} repos)", specs.len());
     eprintln!("{}", "=".repeat(70));
 

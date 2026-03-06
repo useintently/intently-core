@@ -105,6 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 9 new Python import extraction unit tests in `python.rs`: simple, dotted, aliased, from-import, relative, wildcard, multi-file
 
 ### Fixed
+- Go Gin/Echo routes inside `r.Group("/prefix")` now have composed paths — per-file variable tracking resolves local group nesting (e.g., `api.Group("/v1")` + `v1.GET("/items")` → `/api/v1/items`) with 6 new unit tests (ADR-001 GAP-02)
+- PHP Laravel routes inside `Route::middleware('auth')->group()` and `Route::prefix('/api')->group()` now inherit auth and prefix context — context stack propagation through closures with chained modifier support, 6 new unit tests (ADR-001 GAP-02)
+- C# ASP.NET Minimal API routes inside `app.MapGroup("/prefix")` now have composed paths — per-file variable tracking with `.RequireAuthorization()` auth inheritance on groups, 3 new unit tests (ADR-001 GAP-02)
 - `total_imports` stat now counts `ReferenceKind::Import` references instead of `ImportInfo` entries — previously only the TypeScript extractor populated `ImportInfo`, causing `total_imports=0` for all other languages despite having import references in the graph
 - Relative import resolution now works with absolute file paths — `resolve_relative_path()` tries both the normalized (absolute) and project-relative candidate paths, fixing a bug where resolution always failed in integration/production mode because `file_symbols` had absolute keys
 - Removed redundant stable sort on 1.28M+ references in `resolve_all_references()` — the caller (`build_component`) already applies the final sort, saving ~2-3 seconds on large projects like PyTorch
@@ -296,5 +299,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `import_resolver.rs` extended with `resolve_all_references()` setting confidence and resolution_method on resolved references
 - `to_json()` on `KnowledgeGraph` now includes edge confidence in output
 
-### Known Gaps
-- Route group prefix resolution missing for Go Gin `r.Group()`, PHP Laravel `Route::prefix()->group()`, C# `MapGroup()` (ADR-001 GAP-02 partial)
+### Known Limitations
+- Route group prefix resolution is per-file only — cross-file group propagation (e.g., Go `RegisterUserRoutes(userRoutes)` where `userRoutes` was created in another file) requires Phase 2 cross-file data flow analysis (ADR-001 GAP-02 Phase 2)

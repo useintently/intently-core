@@ -32,5 +32,26 @@ app.MapDelete("/api/v1/cache/{key}", (string key, ILogger<Program> logger) =>
     return Results.NoContent();
 }).RequireAuthorization();
 
+// MapGroup — grouped Minimal API routes with shared prefix
+var api = app.MapGroup("/api/v2");
+
+api.MapGet("/products", (ILogger<Program> logger) =>
+{
+    logger.LogInformation("Listing products v2");
+    return Results.Ok(new[] { "Widget", "Gadget" });
+});
+
+api.MapPost("/products", (ILogger<Program> logger) =>
+{
+    logger.LogInformation("Creating product v2");
+    return Results.Created();
+}).RequireAuthorization();
+
+// Nested MapGroup with auth
+var admin = app.MapGroup("/admin").RequireAuthorization();
+
+admin.MapGet("/users", () => Results.Ok("admin users list"));
+admin.MapDelete("/users/{id}", (string id) => Results.NoContent());
+
 app.MapControllers();
 app.Run();

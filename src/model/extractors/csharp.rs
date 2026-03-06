@@ -5,9 +5,11 @@
 //! Extracts:
 //! - `[HttpGet]`, `[HttpPost]`, etc. route attribute detection
 //! - `[Authorize]` auth attribute detection
+//! - `app.MapGroup()` prefix tracking for Minimal API route groups
 //! - `HttpClient` HTTP calls (GetAsync, PostAsync, etc.)
 //! - Log sinks with PII detection
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use tree_sitter::{Node, Tree};
@@ -17,6 +19,13 @@ use crate::model::types::*;
 use crate::parser::SupportedLanguage;
 
 use super::common::{self, anchor_from_node, node_text, node_text_ref, truncate_call_text};
+
+/// Tracked info for a `MapGroup()` variable binding.
+#[derive(Debug, Clone)]
+struct GroupInfo {
+    prefix: String,
+    auth: Option<AuthKind>,
+}
 
 /// ASP.NET Core HTTP verb attributes → HTTP methods.
 const HTTP_VERB_ATTRIBUTES: &[(&str, &str)] = &[
@@ -45,13 +54,26 @@ pub fn extract(
 ) -> FileExtraction {
     let root = tree.root_node();
     let mut extraction = common::new_extraction(file_path, language);
+    let mut group_prefixes: HashMap<String, GroupInfo> = HashMap::new();
 
-    extract_recursive(&root, source, file_path, &mut extraction);
+    extract_recursive(
+        &root,
+        source,
+        file_path,
+        &mut extraction,
+        &mut group_prefixes,
+    );
 
     extraction
 }
 
-fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &mut FileExtraction) {
+fn extract_recursive(
+    node: &Node,
+    source: &str,
+    file_path: &Path,
+    extraction: &mut FileExtraction,
+    group_prefixes: &mut HashMap<String, GroupInfo>,
+) {
     match node.kind() {
         "class_declaration" => {
             try_extract_controller_routes(node, source, file_path, extraction);
@@ -63,8 +85,14 @@ fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &m
                 try_extract_attributed_route(node, source, file_path, extraction, "", &None);
             }
         }
+        "local_declaration_statement" => {
+            try_track_map_group(node, source, group_prefixes);
+        }
+        "expression_statement" => {
+            try_track_map_group_assignment(node, source, group_prefixes);
+        }
         "invocation_expression" => {
-            try_extract_minimal_api_route(node, source, file_path, extraction);
+            try_extract_minimal_api_route(node, source, file_path, extraction, group_prefixes);
             try_extract_http_call(node, source, file_path, extraction);
             common::try_extract_log_sink(node, source, file_path, extraction);
         }
@@ -74,7 +102,7 @@ fn extract_recursive(node: &Node, source: &str, file_path: &Path, extraction: &m
     let child_count = node.child_count();
     for i in 0..child_count {
         if let Some(child) = node.child(i as u32) {
-            extract_recursive(&child, source, file_path, extraction);
+            extract_recursive(&child, source, file_path, extraction, group_prefixes);
         }
     }
 }
@@ -393,12 +421,14 @@ fn is_auth_attribute(name: &str) -> bool {
 /// ```csharp
 /// app.MapGet("/items", () => Results.Ok());
 /// app.MapPost("/items", handler).RequireAuthorization();
+/// var api = app.MapGroup("/api"); api.MapGet("/items", handler);
 /// ```
 fn try_extract_minimal_api_route(
     node: &Node,
     source: &str,
     file_path: &Path,
     extraction: &mut FileExtraction,
+    group_prefixes: &HashMap<String, GroupInfo>,
 ) {
     // Get the method name from the invocation
     let method_name = match extract_invocation_method_name(node, source) {
@@ -419,13 +449,25 @@ fn try_extract_minimal_api_route(
     };
 
     // Extract path from first argument
-    let path = match extract_first_string_argument(node, source) {
+    let raw_path = match extract_first_string_argument(node, source) {
         Some(p) => p,
         None => return,
     };
 
-    // Detect .RequireAuthorization() chaining
-    let auth = detect_minimal_api_auth(node, source);
+    // Resolve group prefix from receiver variable (e.g., `api` in `api.MapGet(...)`)
+    let receiver_group =
+        extract_invocation_receiver(node, source).and_then(|recv| group_prefixes.get(&recv));
+
+    let path = match receiver_group {
+        Some(group) => compose_csharp_path(&group.prefix, raw_path.trim_start_matches('/')),
+        None => raw_path,
+    };
+
+    // Detect .RequireAuthorization() chaining on the route itself
+    let route_auth = detect_minimal_api_auth(node, source);
+
+    // Auth resolution: route-level auth > group-level auth
+    let auth = route_auth.or_else(|| receiver_group.and_then(|g| g.auth.clone()));
 
     extraction.interfaces.push(Interface {
         method: http_method,
@@ -450,6 +492,27 @@ fn extract_invocation_method_name(node: &Node, source: &str) -> Option<String> {
                 // The method name is the `name` field
                 if let Some(name_node) = child.child_by_field_name("name") {
                     return Some(node_text(&name_node, source));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract the receiver (object) name from an `invocation_expression`.
+///
+/// For `api.MapGet(...)`, the structure is:
+/// invocation_expression → member_access_expression → expression: "api"
+///
+/// Returns the identifier text of the receiver, if it is a simple identifier.
+fn extract_invocation_receiver(node: &Node, source: &str) -> Option<String> {
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            if child.kind() == "member_access_expression" {
+                if let Some(expr) = child.child_by_field_name("expression") {
+                    if expr.kind() == "identifier" {
+                        return Some(node_text(&expr, source));
+                    }
                 }
             }
         }
@@ -519,6 +582,176 @@ fn detect_minimal_api_auth(node: &Node, source: &str) -> Option<AuthKind> {
             _ => {}
         }
         current = current.parent()?;
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// MapGroup prefix tracking
+// ---------------------------------------------------------------------------
+
+/// Track `var api = app.MapGroup("/api");` declarations.
+///
+/// Detects `local_declaration_statement` containing a `variable_declarator`
+/// whose initializer calls `MapGroup`. Handles chained `.RequireAuthorization()`.
+fn try_track_map_group(node: &Node, source: &str, group_prefixes: &mut HashMap<String, GroupInfo>) {
+    // local_declaration_statement → variable_declaration → variable_declarator
+    let var_decl = match find_descendant_by_kind(node, "variable_declaration") {
+        Some(d) => d,
+        None => return,
+    };
+
+    for i in 0..var_decl.child_count() {
+        if let Some(declarator) = var_decl.child(i as u32) {
+            if declarator.kind() != "variable_declarator" {
+                continue;
+            }
+
+            let var_name = match declarator.child_by_field_name("name") {
+                Some(n) if n.kind() == "identifier" => node_text(&n, source),
+                _ => continue,
+            };
+
+            // The initializer may be in an equals_value_clause or directly
+            // as a child of the variable_declarator (C# tree-sitter grammar).
+            // Try equals_value_clause first, then fall back to direct children.
+            if let Some(eq) = find_child_by_kind(&declarator, "equals_value_clause") {
+                if let Some(info) = try_extract_map_group_from_expr(&eq, source, group_prefixes) {
+                    group_prefixes.insert(var_name.clone(), info);
+                    continue;
+                }
+            }
+
+            // Direct child: variable_declarator → invocation_expression
+            if let Some(info) = try_extract_map_group_from_expr(&declarator, source, group_prefixes)
+            {
+                group_prefixes.insert(var_name, info);
+            }
+        }
+    }
+}
+
+/// Track `api = app.MapGroup("/api");` assignment expressions.
+fn try_track_map_group_assignment(
+    node: &Node,
+    source: &str,
+    group_prefixes: &mut HashMap<String, GroupInfo>,
+) {
+    // expression_statement → assignment_expression
+    let assignment = match find_child_by_kind(node, "assignment_expression") {
+        Some(a) => a,
+        None => return,
+    };
+
+    let var_name = match assignment.child_by_field_name("left") {
+        Some(n) if n.kind() == "identifier" => node_text(&n, source),
+        _ => return,
+    };
+
+    let right = match assignment.child_by_field_name("right") {
+        Some(r) => r,
+        None => return,
+    };
+
+    if let Some(info) = try_extract_map_group_from_node(&right, source, group_prefixes) {
+        group_prefixes.insert(var_name, info);
+    }
+}
+
+/// Try to extract `MapGroup` info from an expression (within equals_value_clause or assignment RHS).
+///
+/// Walks children to find the invocation_expression containing the `MapGroup` call.
+fn try_extract_map_group_from_expr(
+    node: &Node,
+    source: &str,
+    group_prefixes: &HashMap<String, GroupInfo>,
+) -> Option<GroupInfo> {
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            if let Some(info) = try_extract_map_group_from_node(&child, source, group_prefixes) {
+                return Some(info);
+            }
+        }
+    }
+    None
+}
+
+/// Try to extract `MapGroup` info from a node that may be an invocation_expression.
+///
+/// Handles:
+/// - `app.MapGroup("/api")` — direct call
+/// - `app.MapGroup("/api").RequireAuthorization()` — outer invocation wrapping inner MapGroup
+fn try_extract_map_group_from_node(
+    node: &Node,
+    source: &str,
+    group_prefixes: &HashMap<String, GroupInfo>,
+) -> Option<GroupInfo> {
+    if node.kind() != "invocation_expression" {
+        return None;
+    }
+
+    let method_name = extract_invocation_method_name(node, source)?;
+
+    if method_name == "MapGroup" {
+        let prefix_arg = extract_first_string_argument(node, source)?;
+
+        // Check if the receiver is itself a tracked group variable (nested groups)
+        let receiver_prefix = extract_invocation_receiver(node, source)
+            .and_then(|recv| group_prefixes.get(&recv))
+            .map(|g| g.prefix.as_str())
+            .unwrap_or("");
+
+        let full_prefix = compose_csharp_path(receiver_prefix, prefix_arg.trim_start_matches('/'));
+        return Some(GroupInfo {
+            prefix: full_prefix,
+            auth: None,
+        });
+    }
+
+    // Check for chaining: `something.RequireAuthorization()` where `something` is a MapGroup call
+    if method_name == "RequireAuthorization" {
+        // The receiver of RequireAuthorization is the inner MapGroup invocation
+        // CST: invocation_expression(RequireAuthorization) → member_access_expression
+        //        → invocation_expression(MapGroup)
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i as u32) {
+                if child.kind() == "member_access_expression" {
+                    if let Some(expr) = child.child_by_field_name("expression") {
+                        if let Some(mut info) =
+                            try_extract_map_group_from_node(&expr, source, group_prefixes)
+                        {
+                            info.auth = Some(AuthKind::Attribute("RequireAuthorization".into()));
+                            return Some(info);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Find a descendant node by kind (up to 2 levels deep).
+fn find_descendant_by_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            if child.kind() == kind {
+                return Some(child);
+            }
+        }
+    }
+    // One level deeper
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            for j in 0..child.child_count() {
+                if let Some(grandchild) = child.child(j as u32) {
+                    if grandchild.kind() == kind {
+                        return Some(grandchild);
+                    }
+                }
+            }
+        }
     }
     None
 }
@@ -891,5 +1124,54 @@ public class ProductsController : ControllerBase {
         assert_eq!(authed.len(), 2);
         assert_eq!(ext.dependencies.len(), 1);
         assert!(!ext.sinks.is_empty());
+    }
+
+    // --- MapGroup prefix tracking ---
+
+    #[test]
+    fn mapgroup_prefix_basic() {
+        let ext = extract_cs(
+            r#"
+var app = builder.Build();
+var api = app.MapGroup("/api");
+api.MapGet("/items", () => Results.Ok());
+"#,
+        );
+        assert_eq!(ext.interfaces.len(), 1);
+        assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
+        assert_eq!(ext.interfaces[0].path, "/api/items");
+    }
+
+    #[test]
+    fn mapgroup_prefix_nested() {
+        let ext = extract_cs(
+            r#"
+var app = builder.Build();
+var api = app.MapGroup("/api");
+var v1 = api.MapGroup("/v1");
+v1.MapGet("/items", () => Results.Ok());
+"#,
+        );
+        assert_eq!(ext.interfaces.len(), 1);
+        assert_eq!(ext.interfaces[0].method, HttpMethod::Get);
+        assert_eq!(ext.interfaces[0].path, "/api/v1/items");
+    }
+
+    #[test]
+    fn mapgroup_with_auth() {
+        let ext = extract_cs(
+            r#"
+var app = builder.Build();
+var admin = app.MapGroup("/admin").RequireAuthorization();
+admin.MapGet("/users", () => Results.Ok());
+"#,
+        );
+        assert_eq!(ext.interfaces.len(), 1);
+        assert_eq!(ext.interfaces[0].path, "/admin/users");
+        assert_eq!(
+            ext.interfaces[0].auth,
+            Some(AuthKind::Attribute("RequireAuthorization".into())),
+            "Route inherits auth from MapGroup"
+        );
     }
 }

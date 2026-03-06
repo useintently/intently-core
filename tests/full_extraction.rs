@@ -476,12 +476,12 @@ fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
 
     let routes = &model.components[0].interfaces;
     assert!(
-        routes.len() >= 18,
-        "ASP.NET project should have ≥18 routes (controllers + Minimal API), got {}",
+        routes.len() >= 22,
+        "ASP.NET project should have ≥22 routes (controllers + Minimal API + MapGroup), got {}",
         routes.len()
     );
 
-    // Minimal API routes from Program.cs
+    // Minimal API routes from Program.cs (direct routes)
     let minimal_api_paths = [
         "/health",
         "/api/v1/catalog/categories",
@@ -497,11 +497,32 @@ fn aspnet_ecommerce_extracts_attributes_auth_httpcalls_sinks() {
         );
     }
 
-    // Should have auth (controllers [Authorize] + Minimal API RequireAuthorization)
+    // GAP-02: MapGroup prefix composition — routes inside MapGroup should have composed paths
+    let mapgroup_paths = ["/api/v2/products", "/admin/users"];
+    for path in &mapgroup_paths {
+        assert!(
+            routes.iter().any(|r| r.path == *path),
+            "Expected MapGroup route '{}' to be extracted (GAP-02), found routes: {:?}",
+            path,
+            routes.iter().map(|r| &r.path).collect::<Vec<_>>()
+        );
+    }
+
+    // GAP-02: MapGroup auth propagation — admin group routes should inherit RequireAuthorization
+    let admin_routes: Vec<_> = routes
+        .iter()
+        .filter(|r| r.path.starts_with("/admin/"))
+        .collect();
+    assert!(
+        admin_routes.iter().all(|r| r.auth.is_some()),
+        "All /admin/ MapGroup routes should inherit RequireAuthorization (GAP-02)"
+    );
+
+    // Should have auth (controllers [Authorize] + Minimal API RequireAuthorization + MapGroup)
     let authed = routes.iter().filter(|r| r.auth.is_some()).count();
     assert!(
-        authed >= 7,
-        "Expected ≥7 ASP.NET routes with auth (controllers + Minimal API), got {}",
+        authed >= 10,
+        "Expected ≥10 ASP.NET routes with auth (controllers + Minimal API + MapGroup), got {}",
         authed
     );
 
@@ -646,12 +667,22 @@ fn laravel_ecommerce_extracts_routes_middleware_httpcalls_sinks() {
         routes.len()
     );
 
-    // Should have middleware auth on some routes
+    // Should have middleware auth on many routes (direct + group-inherited)
     let authed = routes.iter().filter(|r| r.auth.is_some()).count();
+    // GAP-02: Routes inside Route::middleware('auth:api')->group() now inherit auth
     assert!(
-        authed >= 3,
-        "Expected ≥3 Laravel routes with ->middleware('auth'), got {}",
+        authed >= 20,
+        "Expected ≥20 Laravel routes with auth (direct + group-inherited via GAP-02), got {}",
         authed
+    );
+
+    // GAP-02: Routes inside Route::middleware('auth:api')->group() should have auth
+    let profile_route = routes
+        .iter()
+        .find(|r| r.path == "/api/profile" && r.method == HttpMethod::Get);
+    assert!(
+        profile_route.is_some() && profile_route.map_or(false, |r| r.auth.is_some()),
+        "GET /api/profile inside middleware('auth:api')->group() should inherit auth (GAP-02)"
     );
 
     // Route::resource('tickets', ...) expands to 7 routes with auth middleware
@@ -2510,6 +2541,22 @@ fn go_workspace_extracts_routes_and_symbols() {
         total_routes >= 5,
         "Go workspace should have ≥5 Gin routes, got {}",
         total_routes
+    );
+
+    // GAP-02: Per-file Group prefix resolution — local nesting should compose paths
+    let all_routes: Vec<&str> = result
+        .model
+        .components
+        .iter()
+        .flat_map(|c| c.interfaces.iter().map(|i| i.path.as_str()))
+        .collect();
+
+    // handlers.go has: rg.Group("/products") then products.GET("", ...), products.GET("/:id", ...)
+    // Per-file tracking resolves local nesting: rg(empty prefix) + "/products" + "" = "/products"
+    assert!(
+        all_routes.iter().any(|p| p.contains("/products")),
+        "Go workspace should have routes with /products prefix from Group nesting (GAP-02), got: {:?}",
+        all_routes
     );
 
     let total_symbols: usize = result
