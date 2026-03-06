@@ -31,6 +31,16 @@ pub enum ResolutionMethod {
     GlobalSameDir,
     /// Multiple global matches — resolved to arbitrary first match.
     GlobalAmbiguous,
+    /// Resolved via an explicit import of an external package symbol.
+    ///
+    /// The symbol was imported explicitly (e.g., `from torch.nn import Module`)
+    /// and then referenced in the code (e.g., `Module(...)`). We know the
+    /// developer's intent from the import statement, but the definition lives
+    /// outside the project boundary.
+    ///
+    /// Higher confidence than `External` (unguided) because the import statement
+    /// provides direct evidence of the symbol's origin.
+    ImportKnown,
     /// Resolved as an external dependency (stdlib, third-party package).
     ///
     /// The import source was classified as a non-project dependency (no `./` or
@@ -51,6 +61,7 @@ impl ResolutionMethod {
             Self::GlobalUnique => "global_unique",
             Self::GlobalSameDir => "global_same_dir",
             Self::GlobalAmbiguous => "global_ambiguous",
+            Self::ImportKnown => "import_known",
             Self::External => "external",
             Self::Unresolved => "unresolved",
         }
@@ -930,6 +941,13 @@ pub struct ImportInfo {
     pub source: String,
     pub specifiers: Vec<String>,
     pub line: usize,
+    /// Alias mappings: local alias name → original imported name.
+    ///
+    /// Populated for `import X as Y` (alias "Y" → original "X") and
+    /// `from pkg import Foo as Bar` (alias "Bar" → original "Foo").
+    /// Empty when no aliases are used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<(String, String)>,
 }
 
 #[cfg(test)]
@@ -1019,6 +1037,7 @@ mod tests {
                 source: "express".into(),
                 specifiers: vec!["express".into()],
                 line: 1,
+                aliases: vec![],
             }],
             symbols: vec![],
             references: vec![],
@@ -1702,6 +1721,7 @@ mod tests {
             ResolutionMethod::GlobalAmbiguous.as_str(),
             "global_ambiguous"
         );
+        assert_eq!(ResolutionMethod::ImportKnown.as_str(), "import_known");
         assert_eq!(ResolutionMethod::External.as_str(), "external");
         assert_eq!(ResolutionMethod::Unresolved.as_str(), "unresolved");
     }

@@ -257,6 +257,7 @@ fn try_extract_import(node: &Node, source: &str, extraction: &mut FileExtraction
         source: import_source,
         specifiers,
         line: node.start_position().row + 1,
+        aliases: vec![],
     });
 }
 

@@ -406,6 +406,8 @@ impl CodeModelBuilder {
             HashMap::with_capacity(state.contributions.len());
         let mut file_symbols: HashMap<PathBuf, Vec<Symbol>> =
             HashMap::with_capacity(state.contributions.len());
+        let mut file_languages: HashMap<PathBuf, crate::parser::SupportedLanguage> =
+            HashMap::with_capacity(state.contributions.len());
 
         for (path, contribution) in &state.contributions {
             interfaces.extend(contribution.interfaces.iter().cloned());
@@ -420,6 +422,7 @@ impl CodeModelBuilder {
 
             file_imports.insert(path.clone(), contribution.imports.clone());
             file_symbols.insert(path.clone(), contribution.symbols.clone());
+            file_languages.insert(path.clone(), contribution.language);
         }
 
         // Post-processing: resolve ALL references (imports + calls + hierarchy)
@@ -430,6 +433,7 @@ impl CodeModelBuilder {
             &file_symbols,
             &references,
             &state.root,
+            &file_languages,
         );
         references = all_resolved;
 
@@ -941,11 +945,13 @@ mod tests {
                     source: "express".into(),
                     specifiers: vec!["express".into()],
                     line: 1,
+                    aliases: vec![],
                 },
                 ImportInfo {
                     source: "axios".into(),
                     specifiers: vec!["axios".into()],
                     line: 2,
+                    aliases: vec![],
                 },
             ],
             symbols: vec![],
@@ -980,6 +986,7 @@ mod tests {
                 source: "lodash".into(),
                 specifiers: vec!["_".into()],
                 line: 1,
+                aliases: vec![],
             }],
             symbols: vec![],
             references: vec![],
@@ -1012,6 +1019,7 @@ mod tests {
                 source: "express".into(),
                 specifiers: vec!["express".into()],
                 line: 1,
+                aliases: vec![],
             }],
             symbols: vec![],
             references: vec![],
@@ -1032,6 +1040,7 @@ mod tests {
                 source: "axios".into(),
                 specifiers: vec!["axios".into()],
                 line: 1,
+                aliases: vec![],
             }],
             symbols: vec![],
             references: vec![],
@@ -1602,11 +1611,13 @@ mod tests {
                     source: "express".into(),
                     specifiers: vec!["Router".into()],
                     line: 1,
+                    aliases: vec![],
                 },
                 ImportInfo {
                     source: "axios".into(),
                     specifiers: vec!["default".into()],
                     line: 2,
+                    aliases: vec![],
                 },
             ],
             symbols: vec![],

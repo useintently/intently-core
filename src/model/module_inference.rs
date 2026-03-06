@@ -209,6 +209,7 @@ mod tests {
             source: source.into(),
             specifiers: vec![],
             line: 1,
+            aliases: vec![],
         }
     }
 

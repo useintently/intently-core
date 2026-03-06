@@ -88,14 +88,18 @@ fn try_extract_import_statement(node: &Node, source: &str, extraction: &mut File
             None => continue,
         };
 
-        let module_name = match child.kind() {
-            "dotted_name" | "identifier" => node_text_ref(&child, source).to_string(),
+        let (module_name, alias) = match child.kind() {
+            "dotted_name" | "identifier" => (node_text_ref(&child, source).to_string(), None),
             "aliased_import" => {
-                // `import torch.nn as nn` — the dotted_name is the first named child
-                match child.named_child(0) {
+                // `import torch.nn as nn` — name is first child, alias is second
+                let name = match child.named_child(0) {
                     Some(name_node) => node_text_ref(&name_node, source).to_string(),
                     None => continue,
-                }
+                };
+                let alias_name = child
+                    .named_child(1)
+                    .map(|a| node_text_ref(&a, source).to_string());
+                (name, alias_name)
             }
             _ => continue,
         };
@@ -105,11 +109,17 @@ fn try_extract_import_statement(node: &Node, source: &str, extraction: &mut File
         }
 
         // `import torch.nn` → source = "torch.nn", specifier = "torch.nn"
-        // The alias (as nn) is just a local name, the source is the module path.
+        // `import torch.nn as nn` → source = "torch.nn", specifier = "torch.nn", alias "nn" → "torch.nn"
+        let aliases = match alias {
+            Some(alias_name) => vec![(alias_name, module_name.clone())],
+            None => vec![],
+        };
+
         extraction.imports.push(ImportInfo {
             source: module_name.clone(),
             specifiers: vec![module_name],
             line,
+            aliases,
         });
     }
 }
@@ -140,8 +150,9 @@ fn try_extract_import_from_statement(node: &Node, source: &str, extraction: &mut
         return;
     }
 
-    // Collect imported specifiers
+    // Collect imported specifiers and aliases
     let mut specifiers = Vec::new();
+    let mut aliases = Vec::new();
     for i in 0..node.named_child_count() {
         let child = match node.named_child(i as u32) {
             Some(c) => c,
@@ -160,9 +171,14 @@ fn try_extract_import_from_statement(node: &Node, source: &str, extraction: &mut
                 }
             }
             "aliased_import" => {
-                // `from x import Foo as Bar` — take the original name
+                // `from x import Foo as Bar` — specifier is "Foo", alias "Bar" → "Foo"
                 if let Some(name_node) = child.named_child(0) {
-                    specifiers.push(node_text_ref(&name_node, source).to_string());
+                    let original = node_text_ref(&name_node, source).to_string();
+                    specifiers.push(original.clone());
+                    if let Some(alias_node) = child.named_child(1) {
+                        let alias_name = node_text_ref(&alias_node, source).to_string();
+                        aliases.push((alias_name, original));
+                    }
                 }
             }
             "wildcard_import" => {
@@ -181,6 +197,7 @@ fn try_extract_import_from_statement(node: &Node, source: &str, extraction: &mut
         source: module_source,
         specifiers,
         line,
+        aliases,
     });
 }
 
@@ -573,6 +590,26 @@ mod tests {
         let ext = extract_py("import torch.nn as nn\n");
         assert_eq!(ext.imports.len(), 1);
         assert_eq!(ext.imports[0].source, "torch.nn");
+        // Alias: "nn" → "torch.nn"
+        assert_eq!(ext.imports[0].aliases.len(), 1);
+        assert_eq!(ext.imports[0].aliases[0].0, "nn");
+        assert_eq!(ext.imports[0].aliases[0].1, "torch.nn");
+    }
+
+    #[test]
+    fn extracts_aliased_import_simple() {
+        let ext = extract_py("import numpy as np\n");
+        assert_eq!(ext.imports.len(), 1);
+        assert_eq!(ext.imports[0].source, "numpy");
+        assert_eq!(ext.imports[0].aliases.len(), 1);
+        assert_eq!(ext.imports[0].aliases[0].0, "np");
+        assert_eq!(ext.imports[0].aliases[0].1, "numpy");
+    }
+
+    #[test]
+    fn non_aliased_import_has_empty_aliases() {
+        let ext = extract_py("import os\n");
+        assert!(ext.imports[0].aliases.is_empty());
     }
 
     #[test]
@@ -627,6 +664,16 @@ from . import views
         assert_eq!(ext.imports.len(), 1);
         assert_eq!(ext.imports[0].source, "torch");
         assert!(ext.imports[0].specifiers.contains(&"Tensor".to_string()));
+        // Alias: "T" → "Tensor"
+        assert_eq!(ext.imports[0].aliases.len(), 1);
+        assert_eq!(ext.imports[0].aliases[0].0, "T");
+        assert_eq!(ext.imports[0].aliases[0].1, "Tensor");
+    }
+
+    #[test]
+    fn from_import_without_alias_has_empty_aliases() {
+        let ext = extract_py("from fastapi import FastAPI, Depends\n");
+        assert!(ext.imports[0].aliases.is_empty());
     }
 
     // ── Route extraction tests ──────────────────────────────────

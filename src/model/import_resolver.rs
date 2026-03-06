@@ -15,8 +15,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::extractors::language_behavior::behavior_for;
 use super::symbol_table::{self, SymbolTable};
 use super::types::{ImportInfo, Reference, ReferenceKind, ResolutionMethod, Symbol};
+use crate::parser::SupportedLanguage;
 
 /// File extensions to try when resolving a relative import path.
 ///
@@ -95,6 +97,7 @@ pub fn resolve_all_references(
     file_symbols: &HashMap<PathBuf, Vec<Symbol>>,
     unresolved_refs: &[Reference],
     project_root: &Path,
+    file_languages: &HashMap<PathBuf, SupportedLanguage>,
 ) -> Vec<Reference> {
     // Phase 1: Import resolution (existing logic)
     let import_refs = resolve_imports(file_imports, file_symbols, project_root);
@@ -129,11 +132,20 @@ pub fn resolve_all_references(
             .get(&reference.source_file)
             .unwrap_or(&empty_index);
 
-        // Resolve via symbol table
-        let result = symbol_table.resolve(
+        // Resolve via symbol table, with builtin detection for the source file's language
+        let is_builtin: Box<dyn Fn(&str) -> bool> =
+            if let Some(&lang) = file_languages.get(&reference.source_file) {
+                let behavior = behavior_for(lang);
+                Box::new(move |name: &str| behavior.is_builtin_symbol(name))
+            } else {
+                Box::new(|_: &str| false)
+            };
+
+        let result = symbol_table.resolve_with_builtins(
             &reference.target_symbol,
             &reference.source_file,
             imports_for_file,
+            &is_builtin,
         );
 
         let (target_file, target_line) = match result.location {
@@ -212,6 +224,7 @@ fn resolve_single_import(
             source: source_to_use.to_string(),
             specifiers: import.specifiers.clone(),
             line: import.line,
+            aliases: import.aliases.clone(),
         };
         resolve_relative_import(
             importing_file,
@@ -502,6 +515,7 @@ mod tests {
                 source: "./service".into(),
                 specifiers: vec!["UserService".into()],
                 line: 1,
+                aliases: vec![],
             }],
         );
 
@@ -533,6 +547,7 @@ mod tests {
                 source: "./utils/auth".into(),
                 specifiers: vec!["verifyToken".into()],
                 line: 3,
+                aliases: vec![],
             }],
         );
 
@@ -563,6 +578,7 @@ mod tests {
                 source: "express".into(),
                 specifiers: vec!["express".into()],
                 line: 1,
+                aliases: vec![],
             }],
         );
 
@@ -587,6 +603,7 @@ mod tests {
                 source: "./models".into(),
                 specifiers: vec!["User".into(), "Order".into(), "Product".into()],
                 line: 2,
+                aliases: vec![],
             }],
         );
 
@@ -624,6 +641,7 @@ mod tests {
                 source: "./does-not-exist".into(),
                 specifiers: vec!["Foo".into()],
                 line: 5,
+                aliases: vec![],
             }],
         );
 
@@ -649,6 +667,7 @@ mod tests {
                 source: "./service".into(),
                 specifiers: vec!["createApp".into()],
                 line: 1,
+                aliases: vec![],
             }],
         );
 
@@ -686,11 +705,13 @@ mod tests {
                     source: "lodash".into(),
                     specifiers: vec!["debounce".into()],
                     line: 1,
+                    aliases: vec![],
                 },
                 ImportInfo {
                     source: "@nestjs/common".into(),
                     specifiers: vec!["Controller".into(), "Get".into()],
                     line: 2,
+                    aliases: vec![],
                 },
             ],
         );
@@ -736,6 +757,7 @@ mod tests {
                 source: "./components".into(),
                 specifiers: vec!["Button".into()],
                 line: 1,
+                aliases: vec![],
             }],
         );
 
@@ -766,6 +788,7 @@ mod tests {
                 source: "../models/user".into(),
                 specifiers: vec!["UserModel".into()],
                 line: 1,
+                aliases: vec![],
             }],
         );
 
@@ -848,6 +871,7 @@ mod tests {
                 source: ".service".into(),
                 specifiers: vec!["UserService".into()],
                 line: 1,
+                aliases: vec![],
             }],
         );
 
@@ -878,6 +902,7 @@ mod tests {
                 source: "..models".into(),
                 specifiers: vec!["User".into()],
                 line: 3,
+                aliases: vec![],
             }],
         );
 
@@ -907,6 +932,7 @@ mod tests {
                 source: "./service".into(),
                 specifiers: vec!["NonexistentSymbol".into()],
                 line: 1,
+                aliases: vec![],
             }],
         );
 

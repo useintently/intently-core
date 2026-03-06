@@ -125,6 +125,19 @@ pub trait LanguageBehavior: Send + Sync {
     fn is_stdlib_module(&self, _module_name: &str) -> bool {
         false
     }
+
+    /// Check if a symbol name is a language builtin (type, function, constant).
+    ///
+    /// Builtins are symbols available without any import statement — they exist
+    /// in the language's global scope. When Phase 2 resolution fails to find a
+    /// symbol and it matches a builtin, it can be classified as `External`
+    /// instead of `Unresolved`, improving confidence scoring.
+    ///
+    /// Returns `false` by default — only languages with well-defined builtin
+    /// sets override this (currently Python and TypeScript/JavaScript).
+    fn is_builtin_symbol(&self, _name: &str) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +179,10 @@ impl LanguageBehavior for TypeScriptBehavior {
     /// are call_expressions, not function_declarations — not detected here.
     fn is_test_symbol(&self, _node: &Node, _source: &str, symbol_name: &str) -> bool {
         symbol_name.starts_with("test")
+    }
+
+    fn is_builtin_symbol(&self, name: &str) -> bool {
+        JS_BUILTINS.binary_search(&name).is_ok()
     }
 }
 
@@ -309,6 +326,223 @@ const PYTHON_STDLIB_MODULES: &[&str] = &[
     "zlib",
 ];
 
+/// Python builtin symbols — available without import.
+///
+/// Covers built-in functions, types, exceptions, and constants from CPython 3.12.
+/// Sorted alphabetically for binary search.
+const PYTHON_BUILTINS: &[&str] = &[
+    "ArithmeticError",
+    "AssertionError",
+    "AttributeError",
+    "BaseException",
+    "BlockingIOError",
+    "BrokenPipeError",
+    "BufferError",
+    "BytesWarning",
+    "ConnectionError",
+    "DeprecationWarning",
+    "EOFError",
+    "Ellipsis",
+    "EnvironmentError",
+    "Exception",
+    "False",
+    "FileExistsError",
+    "FileNotFoundError",
+    "FloatingPointError",
+    "FutureWarning",
+    "GeneratorExit",
+    "IOError",
+    "ImportError",
+    "ImportWarning",
+    "IndentationError",
+    "IndexError",
+    "InterruptedError",
+    "IsADirectoryError",
+    "KeyError",
+    "KeyboardInterrupt",
+    "LookupError",
+    "MemoryError",
+    "ModuleNotFoundError",
+    "NameError",
+    "None",
+    "NotADirectoryError",
+    "NotImplemented",
+    "NotImplementedError",
+    "OSError",
+    "OverflowError",
+    "PendingDeprecationWarning",
+    "PermissionError",
+    "ProcessLookupError",
+    "RecursionError",
+    "ReferenceError",
+    "ResourceWarning",
+    "RuntimeError",
+    "RuntimeWarning",
+    "StopAsyncIteration",
+    "StopIteration",
+    "SyntaxError",
+    "SyntaxWarning",
+    "SystemError",
+    "SystemExit",
+    "TabError",
+    "TimeoutError",
+    "True",
+    "TypeError",
+    "UnboundLocalError",
+    "UnicodeDecodeError",
+    "UnicodeEncodeError",
+    "UnicodeError",
+    "UnicodeTranslateError",
+    "UnicodeWarning",
+    "UserWarning",
+    "ValueError",
+    "Warning",
+    "ZeroDivisionError",
+    "abs",
+    "all",
+    "any",
+    "ascii",
+    "bin",
+    "bool",
+    "breakpoint",
+    "bytearray",
+    "bytes",
+    "callable",
+    "chr",
+    "classmethod",
+    "compile",
+    "complex",
+    "copyright",
+    "credits",
+    "delattr",
+    "dict",
+    "dir",
+    "divmod",
+    "enumerate",
+    "eval",
+    "exec",
+    "exit",
+    "filter",
+    "float",
+    "format",
+    "frozenset",
+    "getattr",
+    "globals",
+    "hasattr",
+    "hash",
+    "help",
+    "hex",
+    "id",
+    "input",
+    "int",
+    "isinstance",
+    "issubclass",
+    "iter",
+    "len",
+    "license",
+    "list",
+    "locals",
+    "map",
+    "max",
+    "memoryview",
+    "min",
+    "next",
+    "object",
+    "oct",
+    "open",
+    "ord",
+    "pow",
+    "print",
+    "property",
+    "quit",
+    "range",
+    "repr",
+    "reversed",
+    "round",
+    "set",
+    "setattr",
+    "slice",
+    "sorted",
+    "staticmethod",
+    "str",
+    "sum",
+    "super",
+    "tuple",
+    "type",
+    "vars",
+    "zip",
+];
+
+/// TypeScript/JavaScript builtin globals — available without import.
+///
+/// Covers global constructors, objects, and functions from ECMAScript 2023 + Node.js.
+/// Sorted alphabetically for binary search.
+const JS_BUILTINS: &[&str] = &[
+    "Array",
+    "ArrayBuffer",
+    "BigInt",
+    "Boolean",
+    "Buffer",
+    "DataView",
+    "Date",
+    "Error",
+    "EvalError",
+    "Float32Array",
+    "Float64Array",
+    "Function",
+    "Infinity",
+    "Int16Array",
+    "Int32Array",
+    "Int8Array",
+    "JSON",
+    "Map",
+    "Math",
+    "NaN",
+    "Number",
+    "Object",
+    "Promise",
+    "Proxy",
+    "RangeError",
+    "ReferenceError",
+    "Reflect",
+    "RegExp",
+    "Set",
+    "SharedArrayBuffer",
+    "String",
+    "Symbol",
+    "SyntaxError",
+    "TypeError",
+    "URIError",
+    "Uint16Array",
+    "Uint32Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "WeakMap",
+    "WeakRef",
+    "WeakSet",
+    "clearInterval",
+    "clearTimeout",
+    "console",
+    "decodeURI",
+    "decodeURIComponent",
+    "encodeURI",
+    "encodeURIComponent",
+    "eval",
+    "fetch",
+    "globalThis",
+    "isFinite",
+    "isNaN",
+    "parseFloat",
+    "parseInt",
+    "process",
+    "queueMicrotask",
+    "require",
+    "setInterval",
+    "setTimeout",
+    "structuredClone",
+    "undefined",
+];
+
 /// Behavior for Python.
 pub(crate) struct PythonBehavior;
 
@@ -357,6 +591,10 @@ impl LanguageBehavior for PythonBehavior {
     /// first segment (`os`) before calling this method.
     fn is_stdlib_module(&self, module_name: &str) -> bool {
         PYTHON_STDLIB_MODULES.contains(&module_name)
+    }
+
+    fn is_builtin_symbol(&self, name: &str) -> bool {
+        PYTHON_BUILTINS.binary_search(&name).is_ok()
     }
 }
 
@@ -1456,5 +1694,82 @@ mod tests {
         assert!(!JavaBehavior.is_stdlib_module("java"));
         assert!(!GoBehavior.is_stdlib_module("fmt"));
         assert!(!GenericBehavior.is_stdlib_module("std"));
+    }
+
+    // =======================================================================
+    // is_builtin_symbol
+    // =======================================================================
+
+    #[test]
+    fn python_recognizes_builtin_types_and_functions() {
+        assert!(PythonBehavior.is_builtin_symbol("int"));
+        assert!(PythonBehavior.is_builtin_symbol("str"));
+        assert!(PythonBehavior.is_builtin_symbol("list"));
+        assert!(PythonBehavior.is_builtin_symbol("dict"));
+        assert!(PythonBehavior.is_builtin_symbol("print"));
+        assert!(PythonBehavior.is_builtin_symbol("len"));
+        assert!(PythonBehavior.is_builtin_symbol("range"));
+        assert!(PythonBehavior.is_builtin_symbol("isinstance"));
+        assert!(PythonBehavior.is_builtin_symbol("super"));
+        assert!(PythonBehavior.is_builtin_symbol("property"));
+        assert!(PythonBehavior.is_builtin_symbol("staticmethod"));
+        assert!(PythonBehavior.is_builtin_symbol("classmethod"));
+    }
+
+    #[test]
+    fn python_recognizes_builtin_exceptions() {
+        assert!(PythonBehavior.is_builtin_symbol("Exception"));
+        assert!(PythonBehavior.is_builtin_symbol("ValueError"));
+        assert!(PythonBehavior.is_builtin_symbol("TypeError"));
+        assert!(PythonBehavior.is_builtin_symbol("KeyError"));
+        assert!(PythonBehavior.is_builtin_symbol("AttributeError"));
+        assert!(PythonBehavior.is_builtin_symbol("RuntimeError"));
+        assert!(PythonBehavior.is_builtin_symbol("NotImplementedError"));
+        assert!(PythonBehavior.is_builtin_symbol("StopIteration"));
+    }
+
+    #[test]
+    fn python_recognizes_builtin_constants() {
+        assert!(PythonBehavior.is_builtin_symbol("True"));
+        assert!(PythonBehavior.is_builtin_symbol("False"));
+        assert!(PythonBehavior.is_builtin_symbol("None"));
+    }
+
+    #[test]
+    fn python_rejects_non_builtin_symbols() {
+        assert!(!PythonBehavior.is_builtin_symbol("torch"));
+        assert!(!PythonBehavior.is_builtin_symbol("numpy"));
+        assert!(!PythonBehavior.is_builtin_symbol("MyClass"));
+        assert!(!PythonBehavior.is_builtin_symbol("custom_func"));
+    }
+
+    #[test]
+    fn typescript_recognizes_builtin_globals() {
+        assert!(TypeScriptBehavior.is_builtin_symbol("console"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("Promise"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("Array"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("Object"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("Map"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("Set"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("Error"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("JSON"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("Math"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("Date"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("setTimeout"));
+        assert!(TypeScriptBehavior.is_builtin_symbol("fetch"));
+    }
+
+    #[test]
+    fn typescript_rejects_non_builtin_symbols() {
+        assert!(!TypeScriptBehavior.is_builtin_symbol("express"));
+        assert!(!TypeScriptBehavior.is_builtin_symbol("MyComponent"));
+        assert!(!TypeScriptBehavior.is_builtin_symbol("lodash"));
+    }
+
+    #[test]
+    fn non_python_ts_languages_return_false_for_builtins() {
+        assert!(!JavaBehavior.is_builtin_symbol("int"));
+        assert!(!GoBehavior.is_builtin_symbol("fmt"));
+        assert!(!GenericBehavior.is_builtin_symbol("print"));
     }
 }

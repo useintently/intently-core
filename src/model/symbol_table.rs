@@ -100,23 +100,71 @@ impl SymbolTable {
     /// 3. Global unique: exactly one global match
     /// 4. Global same-directory: prefer match in same directory as source
     /// 5. Global ambiguous: multiple matches, pick first deterministically
-    /// 6. Unresolved: no match
+    /// 6. Builtin: check `is_builtin` closure (language builtins)
+    /// 7. Unresolved: no match
     pub fn resolve(
         &self,
         name: &str,
         source_file: &Path,
         imported_symbols: &HashMap<String, PathBuf>,
     ) -> ResolveResult {
+        self.resolve_with_builtins(name, source_file, imported_symbols, &|_| false)
+    }
+
+    /// Resolve with an optional builtin symbol checker.
+    ///
+    /// Same as [`resolve`] but accepts a closure to check if an unresolved
+    /// symbol is a language builtin (e.g., Python `print`, JS `console`).
+    /// When a symbol matches a builtin, it's classified as `External` (0.65)
+    /// instead of `Unresolved` (0.0).
+    pub fn resolve_with_builtins(
+        &self,
+        name: &str,
+        source_file: &Path,
+        imported_symbols: &HashMap<String, PathBuf>,
+        is_builtin: &dyn Fn(&str) -> bool,
+    ) -> ResolveResult {
         let bare_name = extract_bare_name(name);
 
-        // 1. Import-based resolution (0.95)
+        // 1. Import-based resolution (0.95 internal, 0.75 external)
         if let Some(target_file) = imported_symbols.get(bare_name) {
+            if target_file.as_os_str() == EXTERNAL_SENTINEL {
+                return ResolveResult {
+                    location: None,
+                    confidence: 0.75,
+                    method: ResolutionMethod::ImportKnown,
+                };
+            }
             if let Some(loc) = self.resolve_in_file(target_file, bare_name) {
                 return ResolveResult {
                     location: Some(loc.clone()),
                     confidence: 0.95,
                     method: ResolutionMethod::ImportBased,
                 };
+            }
+        }
+
+        // 1b. Receiver-prefix check for qualified names (e.g., "np.array" → check "np")
+        // If the receiver is an imported alias, the call targets an external package member.
+        if bare_name != name {
+            if let Some(receiver) = extract_receiver(name) {
+                if let Some(target_file) = imported_symbols.get(receiver) {
+                    if target_file.as_os_str() == EXTERNAL_SENTINEL {
+                        return ResolveResult {
+                            location: None,
+                            confidence: 0.70,
+                            method: ResolutionMethod::ImportKnown,
+                        };
+                    }
+                    // Receiver points to a project file — try resolving bare name there
+                    if let Some(loc) = self.resolve_in_file(target_file, bare_name) {
+                        return ResolveResult {
+                            location: Some(loc.clone()),
+                            confidence: 0.90,
+                            method: ResolutionMethod::ImportBased,
+                        };
+                    }
+                }
             }
         }
 
@@ -129,14 +177,25 @@ impl SymbolTable {
             };
         }
 
-        // 3-5. Global resolution
+        // 3-6. Global resolution
         let global_matches = self.resolve_global(bare_name);
         match global_matches.len() {
-            0 => ResolveResult {
-                location: None,
-                confidence: 0.0,
-                method: ResolutionMethod::Unresolved,
-            },
+            0 => {
+                // 6. Builtin check — known language builtins classified as External
+                if is_builtin(bare_name) {
+                    ResolveResult {
+                        location: None,
+                        confidence: 0.65,
+                        method: ResolutionMethod::External,
+                    }
+                } else {
+                    ResolveResult {
+                        location: None,
+                        confidence: 0.0,
+                        method: ResolutionMethod::Unresolved,
+                    }
+                }
+            }
             1 => ResolveResult {
                 location: Some(global_matches[0].clone()),
                 confidence: 0.80,
@@ -167,10 +226,21 @@ impl SymbolTable {
     }
 }
 
+/// Sentinel path used to mark external import specifiers in the import index.
+///
+/// When `resolve()` encounters this sentinel as the target file, it returns
+/// `ImportKnown` (0.75) instead of `ImportBased` (0.95), since the symbol
+/// is confirmed via import but lives outside the project.
+pub const EXTERNAL_SENTINEL: &str = "<external>";
+
 /// Build an import index mapping imported names to their source files.
 ///
 /// For each file, examines its imports and resolves them to target files
 /// using the `file_symbols` map (same logic as `import_resolver`).
+///
+/// External imports (no `./` or `../` prefix) register their specifiers
+/// with a sentinel path, enabling Phase 2 to recognize them as
+/// "imported from external package" rather than falling to global search.
 pub fn build_import_index(
     file: &Path,
     imports: &[crate::model::types::ImportInfo],
@@ -178,25 +248,58 @@ pub fn build_import_index(
     project_root: &Path,
 ) -> HashMap<String, PathBuf> {
     let mut index = HashMap::new();
+    let external_path = PathBuf::from(EXTERNAL_SENTINEL);
 
     for import in imports {
         let is_relative = import.source.starts_with("./") || import.source.starts_with("../");
-        if !is_relative {
-            continue; // External imports can't be resolved to project files
-        }
 
-        // Resolve the import path to a file using the same logic as import_resolver
-        if let Some(resolved_file) =
-            resolve_relative_path_for_index(file, &import.source, file_symbols, project_root)
-        {
+        if is_relative {
+            // Resolve the import path to a file using the same logic as import_resolver
+            if let Some(resolved_file) =
+                resolve_relative_path_for_index(file, &import.source, file_symbols, project_root)
+            {
+                let specifiers = if import.specifiers.is_empty() {
+                    vec![import.source.clone()]
+                } else {
+                    import.specifiers.clone()
+                };
+
+                for specifier in specifiers {
+                    index.insert(specifier, resolved_file.clone());
+                }
+
+                // Register aliases pointing to the same resolved file
+                for (alias_name, _original) in &import.aliases {
+                    index
+                        .entry(alias_name.clone())
+                        .or_insert_with(|| resolved_file.clone());
+                }
+            }
+        } else {
+            // External import: register specifiers with sentinel path.
+            // This allows Phase 2 to classify references as ImportKnown (0.75)
+            // instead of falling through to GlobalAmbiguous (0.40).
             let specifiers = if import.specifiers.is_empty() {
+                // Default import: `import express from 'express'` → register "express"
                 vec![import.source.clone()]
             } else {
                 import.specifiers.clone()
             };
 
             for specifier in specifiers {
-                index.insert(specifier, resolved_file.clone());
+                // Don't overwrite a relative import resolution with an external one.
+                // Relative imports are more precise.
+                index
+                    .entry(specifier)
+                    .or_insert_with(|| external_path.clone());
+            }
+
+            // Register aliases pointing to external sentinel
+            // `import numpy as np` → "np" → <external>
+            for (alias_name, _original) in &import.aliases {
+                index
+                    .entry(alias_name.clone())
+                    .or_insert_with(|| external_path.clone());
             }
         }
     }
@@ -251,6 +354,29 @@ fn resolve_relative_path_for_index(
         }
     }
 
+    None
+}
+
+/// Extract the receiver/prefix from a qualified callee string.
+///
+/// Returns the first segment before the last separator:
+/// - `"np.array"` → `Some("np")`
+/// - `"a.b.c"` → `Some("a")`  (first segment, not "a.b")
+/// - `"Cls::method"` → `Some("Cls")`
+/// - `"validate"` → `None` (no qualifier)
+fn extract_receiver(target_symbol: &str) -> Option<&str> {
+    // Try . separator first (most common: Python, JS/TS, Java, Go)
+    if let Some(pos) = target_symbol.find('.') {
+        return Some(&target_symbol[..pos]);
+    }
+    // Try :: separator (Rust, PHP, C++)
+    if let Some(pos) = target_symbol.find("::") {
+        return Some(&target_symbol[..pos]);
+    }
+    // Try -> separator (PHP)
+    if let Some(pos) = target_symbol.find("->") {
+        return Some(&target_symbol[..pos]);
+    }
     None
 }
 
@@ -527,6 +653,24 @@ mod tests {
         assert_eq!(extract_bare_name("validate"), "validate");
     }
 
+    // --- Receiver extraction ---
+
+    #[test]
+    fn extract_receiver_from_dot_qualified() {
+        assert_eq!(extract_receiver("np.array"), Some("np"));
+        assert_eq!(extract_receiver("a.b.c"), Some("a"));
+    }
+
+    #[test]
+    fn extract_receiver_from_scope_qualified() {
+        assert_eq!(extract_receiver("Cls::method"), Some("Cls"));
+    }
+
+    #[test]
+    fn extract_receiver_simple_name_returns_none() {
+        assert_eq!(extract_receiver("validate"), None);
+    }
+
     // --- Import index builder ---
 
     #[test]
@@ -536,6 +680,7 @@ mod tests {
             source: "./service".into(),
             specifiers: vec!["UserService".into()],
             line: 1,
+            aliases: vec![],
         }];
 
         let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
@@ -547,17 +692,225 @@ mod tests {
     }
 
     #[test]
-    fn build_import_index_skips_external_imports() {
+    fn build_import_index_registers_external_specifiers_with_sentinel() {
         let fs = make_file_symbols();
         let imports = vec![crate::model::types::ImportInfo {
             source: "express".into(),
-            specifiers: vec!["express".into()],
+            specifiers: vec!["Router".into(), "Request".into()],
             line: 1,
+            aliases: vec![],
         }];
 
         let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
 
-        assert!(index.is_empty());
+        assert_eq!(index.get("Router"), Some(&PathBuf::from(EXTERNAL_SENTINEL)));
+        assert_eq!(
+            index.get("Request"),
+            Some(&PathBuf::from(EXTERNAL_SENTINEL))
+        );
+    }
+
+    #[test]
+    fn build_import_index_external_default_import_uses_source_name() {
+        let fs = make_file_symbols();
+        let imports = vec![crate::model::types::ImportInfo {
+            source: "express".into(),
+            specifiers: vec![], // default import
+            line: 1,
+            aliases: vec![],
+        }];
+
+        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+
+        assert_eq!(
+            index.get("express"),
+            Some(&PathBuf::from(EXTERNAL_SENTINEL))
+        );
+    }
+
+    #[test]
+    fn build_import_index_relative_takes_precedence_over_external() {
+        let fs = make_file_symbols();
+        let imports = vec![
+            // External import of "UserService"
+            crate::model::types::ImportInfo {
+                source: "some-package".into(),
+                specifiers: vec!["UserService".into()],
+                line: 1,
+                aliases: vec![],
+            },
+            // Relative import that resolves to an actual file
+            crate::model::types::ImportInfo {
+                source: "./service".into(),
+                specifiers: vec!["UserService".into()],
+                line: 2,
+                aliases: vec![],
+            },
+        ];
+
+        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+
+        // Relative import should win (more precise)
+        assert_eq!(
+            index.get("UserService"),
+            Some(&PathBuf::from("src/service.ts"))
+        );
+    }
+
+    #[test]
+    fn build_import_index_mixed_relative_and_external() {
+        let fs = make_file_symbols();
+        let imports = vec![
+            crate::model::types::ImportInfo {
+                source: "./service".into(),
+                specifiers: vec!["UserService".into()],
+                line: 1,
+                aliases: vec![],
+            },
+            crate::model::types::ImportInfo {
+                source: "lodash".into(),
+                specifiers: vec!["debounce".into()],
+                line: 2,
+                aliases: vec![],
+            },
+        ];
+
+        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+
+        assert_eq!(
+            index.get("UserService"),
+            Some(&PathBuf::from("src/service.ts"))
+        );
+        assert_eq!(
+            index.get("debounce"),
+            Some(&PathBuf::from(EXTERNAL_SENTINEL))
+        );
+    }
+
+    // --- Alias registration ---
+
+    #[test]
+    fn build_import_index_registers_aliases_for_external_imports() {
+        let fs = make_file_symbols();
+        let imports = vec![crate::model::types::ImportInfo {
+            source: "numpy".into(),
+            specifiers: vec!["numpy".into()],
+            line: 1,
+            aliases: vec![("np".into(), "numpy".into())],
+        }];
+
+        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+
+        // Both the original name and the alias should be registered
+        assert_eq!(index.get("numpy"), Some(&PathBuf::from(EXTERNAL_SENTINEL)));
+        assert_eq!(index.get("np"), Some(&PathBuf::from(EXTERNAL_SENTINEL)));
+    }
+
+    #[test]
+    fn build_import_index_registers_aliases_for_relative_imports() {
+        let fs = make_file_symbols();
+        let imports = vec![crate::model::types::ImportInfo {
+            source: "./service".into(),
+            specifiers: vec!["UserService".into()],
+            line: 1,
+            aliases: vec![("US".into(), "UserService".into())],
+        }];
+
+        let index = build_import_index(Path::new("src/handler.ts"), &imports, &fs, Path::new(""));
+
+        assert_eq!(
+            index.get("UserService"),
+            Some(&PathBuf::from("src/service.ts"))
+        );
+        assert_eq!(index.get("US"), Some(&PathBuf::from("src/service.ts")));
+    }
+
+    // --- Receiver-prefix resolution ---
+
+    #[test]
+    fn resolve_qualified_name_via_receiver_prefix() {
+        let fs = make_file_symbols();
+        let table = SymbolTable::from_file_symbols(&fs);
+
+        let mut imports = HashMap::new();
+        imports.insert("np".to_string(), PathBuf::from(EXTERNAL_SENTINEL));
+
+        // "np.array" → receiver "np" is in imports as external
+        let result =
+            table.resolve_with_builtins("np.array", Path::new("src/handler.ts"), &imports, &|_| {
+                false
+            });
+
+        assert!(result.location.is_none());
+        assert_eq!(result.confidence, 0.70);
+        assert_eq!(result.method, ResolutionMethod::ImportKnown);
+    }
+
+    // --- ImportKnown resolution ---
+
+    #[test]
+    fn resolve_via_import_known_for_external_specifier() {
+        let fs = make_file_symbols();
+        let table = SymbolTable::from_file_symbols(&fs);
+
+        let mut imports = HashMap::new();
+        imports.insert("Router".to_string(), PathBuf::from(EXTERNAL_SENTINEL));
+
+        let result = table.resolve("Router", Path::new("src/handler.ts"), &imports);
+
+        assert!(result.location.is_none());
+        assert_eq!(result.confidence, 0.75);
+        assert_eq!(result.method, ResolutionMethod::ImportKnown);
+    }
+
+    // --- Builtin resolution ---
+
+    #[test]
+    fn resolve_with_builtins_classifies_known_builtins_as_external() {
+        let fs = make_file_symbols();
+        let table = SymbolTable::from_file_symbols(&fs);
+        let imports = HashMap::new();
+
+        let result =
+            table.resolve_with_builtins("print", Path::new("src/handler.ts"), &imports, &|name| {
+                name == "print" || name == "len"
+            });
+
+        assert!(result.location.is_none());
+        assert_eq!(result.confidence, 0.65);
+        assert_eq!(result.method, ResolutionMethod::External);
+    }
+
+    #[test]
+    fn resolve_with_builtins_unknown_symbol_stays_unresolved() {
+        let fs = make_file_symbols();
+        let table = SymbolTable::from_file_symbols(&fs);
+        let imports = HashMap::new();
+
+        let result = table.resolve_with_builtins(
+            "unknown_func",
+            Path::new("src/handler.ts"),
+            &imports,
+            &|name| name == "print",
+        );
+
+        assert!(result.location.is_none());
+        assert_eq!(result.confidence, 0.0);
+        assert_eq!(result.method, ResolutionMethod::Unresolved);
+    }
+
+    #[test]
+    fn resolve_without_builtins_defaults_to_unresolved() {
+        let fs = make_file_symbols();
+        let table = SymbolTable::from_file_symbols(&fs);
+        let imports = HashMap::new();
+
+        // Using the non-builtin resolve() should never match builtins
+        let result = table.resolve("print", Path::new("src/handler.ts"), &imports);
+
+        assert!(result.location.is_none());
+        assert_eq!(result.confidence, 0.0);
+        assert_eq!(result.method, ResolutionMethod::Unresolved);
     }
 
     // --- Resolve with qualified names (integration test) ---

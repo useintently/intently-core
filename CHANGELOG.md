@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ResolutionMethod::ImportKnown` variant (confidence 0.75) — identifies symbols explicitly imported from external packages then referenced in code, distinguishing intentional external usage from unguided resolution guesses (no-ticket)
+- `LanguageBehavior::is_builtin_symbol()` trait method — classifies language-native symbols (builtins) available without import, enabling resolution to return `External` (0.65) instead of `Unresolved` (0.0) for known builtins (no-ticket)
+- Python builtins classification: 142 symbols (functions, types, exceptions, constants from CPython 3.12) recognized via binary search (no-ticket)
+- TypeScript/JavaScript builtins classification: 64 globals (ECMAScript 2023 + Node.js) recognized via binary search (no-ticket)
+- `aliases: Vec<(String, String)>` field on `ImportInfo` — captures `import X as Y` and `from pkg import Foo as Bar` alias mappings, enabling Phase 2 resolution to recognize aliased references like `np.array()` from `import numpy as np` (no-ticket)
+- Receiver-prefix resolution in `SymbolTable` — qualified names like `np.array` check receiver `np` against import index, classifying as `ImportKnown` (0.70) when the receiver is an imported alias (no-ticket)
 - `quality-gate` skill (`.claude/skills/quality-gate/`) — lightweight post-implementation verification running fmt, clippy, test, and CHANGELOG gates with PASS/FAIL per gate (no-ticket)
 - `implementation-playbook` rule (`.claude/rules/implementation-playbook.md`) — step-by-step process for implementing changes covering standard flow, test creation patterns, CHANGELOG conventions, commit format, common patterns (new field, new utility, public API change), and anti-patterns (no-ticket)
 
@@ -105,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 9 new Python import extraction unit tests in `python.rs`: simple, dotted, aliased, from-import, relative, wildcard, multi-file
 
 ### Fixed
+- Import resolution for external package specifiers — `build_import_index()` now registers specifiers from external imports (e.g., `from torch.nn import Module`) enabling Phase 2 to classify references as `ImportKnown` (0.75) instead of falling to `GlobalAmbiguous` (0.40), expected to reclassify ~32% of references on large Python codebases (no-ticket)
 - Go Gin/Echo routes inside `r.Group("/prefix")` now have composed paths — per-file variable tracking resolves local group nesting (e.g., `api.Group("/v1")` + `v1.GET("/items")` → `/api/v1/items`) with 6 new unit tests (ADR-001 GAP-02)
 - PHP Laravel routes inside `Route::middleware('auth')->group()` and `Route::prefix('/api')->group()` now inherit auth and prefix context — context stack propagation through closures with chained modifier support, 6 new unit tests (ADR-001 GAP-02)
 - C# ASP.NET Minimal API routes inside `app.MapGroup("/prefix")` now have composed paths — per-file variable tracking with `.RequireAuthorization()` auth inheritance on groups, 3 new unit tests (ADR-001 GAP-02)
